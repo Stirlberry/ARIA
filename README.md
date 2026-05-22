@@ -1,5 +1,7 @@
 # ARIA — Adaptive Reinforcement Intelligence Architecture
 
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/Stirlberry?label=Sponsor%20ARIA&logo=githubsponsors&color=EA4AAA)](https://github.com/sponsors/Stirlberry)
+
 > A multi-agent AI simulation where agents must learn to survive, cooperate, and communicate — or die.
 
 ARIA is not a chatbot. It is not a benchmark. It is a living simulation: a population of AI agents dropped into a resource-scarce environment with one mandate — **survive**. Agents that fail to find food die. Agents that succeed replicate. Over time, behaviours emerge that nobody programmed.
@@ -89,7 +91,7 @@ ARIA is an ongoing experiment. The agents are still running. This repository is 
 
 If you find this project interesting, **watch the repo** to follow along. More detailed write-ups on what's emerging will be posted as milestones are reached.
 
-<!-- GitHub Sponsors badge will go here once active -->
+[![Sponsor ARIA](https://img.shields.io/github/sponsors/Stirlberry?label=Sponsor%20ARIA&logo=githubsponsors&color=EA4AAA)](https://github.com/sponsors/Stirlberry)
 
 ---
 
