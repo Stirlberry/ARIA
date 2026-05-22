@@ -68,7 +68,7 @@ AUTOSAVE_EVERY        = 500
 # Population
 INITIAL_AGENTS   = ['ARIA-CAFE', 'ARIA-BABE', 'ARIA-DEAD', 'ARIA-BEEF']
 MAX_POPULATION   = 4
-MIN_COORD_AGENTS = 2       # any 2 agents near a coord node triggers coordination
+MIN_COORD_AGENTS = 3       # any 3 agents near a coord node triggers coordination
 
 # Replication
 MUTATION_STD             = 0.02
