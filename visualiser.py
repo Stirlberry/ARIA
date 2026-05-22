@@ -3,6 +3,7 @@ ARIA Visualiser — Phase 2
 Renders every step at training speed (no FPS cap).
 """
 
+import os
 import sys
 import pygame
 from config import GRID_SIZE, CELL_SIZE
@@ -58,9 +59,10 @@ class Visualiser:
         self.font_lg = pygame.font.SysFont('monospace', 17, bold=True)
         self.font_md = pygame.font.SysFont('monospace', 13)
         self.font_sm = pygame.font.SysFont('monospace', 11)
-        self.signal_history    = []
-        self.replication_flash = 0
-        self.last_replication  = None
+        self.signal_history      = []
+        self.replication_flash   = 0
+        self.last_replication    = None
+        self._save_screenshot    = False
 
         self.screen.fill(BG)
         cx = self.width // 2
@@ -76,8 +78,11 @@ class Visualiser:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self._quit()
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                self._quit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self._quit()
+                if event.key == pygame.K_s:
+                    self._save_screenshot = True
 
     def _quit(self):
         pygame.quit()
@@ -220,9 +225,16 @@ class Visualiser:
         pygame.draw.line(self.screen, PANEL_LINE,
                          (px-4, leg_y), (self.width-8, leg_y), 1)
         self.screen.blit(
-            self.font_sm.render('$ solo   CO coord   ESC quit', True, MUTED),
+            self.font_sm.render('$ solo   CO coord   S save   ESC quit', True, MUTED),
             (px, leg_y + 8)
         )
+
+    def _do_screenshot(self, episode):
+        path = os.path.join('logs', 'screenshots')
+        os.makedirs(path, exist_ok=True)
+        filename = os.path.join(path, f'aria_ep{episode:06d}.png')
+        pygame.image.save(self.screen, filename)
+        print(f'  [Screenshot] Saved → {filename}')
 
     def render(self, env, agents, channel, episode, step,
                ep_rewards, generation, all_ids_ever):
@@ -231,3 +243,6 @@ class Visualiser:
         self._draw_grid(env)
         self._draw_panel(agents, channel, episode, step, ep_rewards, generation)
         pygame.display.flip()
+        if self._save_screenshot:
+            self._do_screenshot(episode)
+            self._save_screenshot = False

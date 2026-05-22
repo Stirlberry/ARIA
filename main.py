@@ -240,6 +240,8 @@ def main():
             for agent_id, agent in agents.items():
                 agent.decay_epsilon()
                 agent.end_episode()
+                partner_ids = [aid for aid in agents if aid != agent_id]
+                agent.update_reputation(partner_ids, ep_coord_any)
                 help_mon.record_episode(agent_id, ep_rewards[agent_id], ep_coord_any)
                 plateau_mon.record(agent_id, ep_rewards[agent_id])
 

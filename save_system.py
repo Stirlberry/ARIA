@@ -53,6 +53,7 @@ def save_checkpoint(episode, agents, channel, generation,
             'sub_goal':       agent.sub_goal.to_dict() if agent.sub_goal else None,
             'tom_steps':       int(agent._tom_steps),
             'repl_request_ep': int(agent._repl_request_ep),
+            'reputation':      dict(agent.reputation),
         }
 
     torch.save(weights, pt_path)
@@ -192,6 +193,7 @@ def restore(meta, pt_path, shared_replay=None):
         agent.episodes          = int(am['episodes'])
         agent._tom_steps        = int(am.get('tom_steps', 0))
         agent._repl_request_ep  = int(am.get('repl_request_ep', -9999))
+        agent.reputation        = dict(am.get('reputation', {}))
         agents[agent_id]        = agent
 
     channel               = CommunicationChannel(append_log=True)

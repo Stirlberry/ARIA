@@ -70,6 +70,12 @@ _PARTNER_FEATURE_SIZE = 9 + 3 + (N_SIGNALS + 1) * MAX_MSG_LEN  # dir + dist + ms
 _VISIT_COUNT_MAX          = 50_000
 _VISIT_COUNT_EVICT_THRESH = 100
 
+# Reputation system — per-partner trust scores
+_REP_INIT        = 0.5    # starting reputation for an unknown partner
+_REP_BOOST       = 0.05   # increase per episode when coordination achieved
+_REP_PENALTY     = 0.01   # decrease per episode when no coordination
+_REP_BONUS_SCALE = 0.5    # max extra reward per step when partner rep = 1.0
+
 # ── Hyperparameter evolution bounds ───────────────────────────────────────────
 
 _HP_BOUNDS = {
@@ -605,6 +611,9 @@ class ARIAAgent:
         )
         self._tom_steps = 0   # training samples seen; bonus withheld until warmed up
 
+        # Reputation — per-partner trust scores {agent_id: float in [0,1]}
+        self.reputation = {}
+
         # Agent-initiated replication
         self._repl_window     = deque(maxlen=SELF_REPL_WINDOW)
         self._repl_request_ep = -SELF_REPL_COOLDOWN
@@ -686,9 +695,14 @@ class ARIAAgent:
                 self._tom_steps += 1
 
         # ── Potential-based dense reward shaping ───────────────────────────────
-        shaping   = DISCOUNT_FACTOR * _potential(next_state) - _potential(state)
+        shaping = DISCOUNT_FACTOR * _potential(next_state) - _potential(state)
 
-        augmented = reward + shaping + global_cur + ep_cur + sg_bonus + tom_bonus
+        # ── Reputation bonus: extra reward when coordinating with trusted partners
+        rep_bonus = 0.0
+        if coord_achieved and self.reputation:
+            rep_bonus = np.mean(list(self.reputation.values())) * _REP_BONUS_SCALE
+
+        augmented = reward + shaping + global_cur + ep_cur + sg_bonus + tom_bonus + rep_bonus
 
         sv  = _encode(state)
         nsv = _encode(next_state)
@@ -793,6 +807,16 @@ class ARIAAgent:
         self._repl_window.append(ep)
         self._try_discover_goal()
         return ep
+
+    def update_reputation(self, partner_ids, coord_this_ep):
+        """Update trust scores for each partner after an episode."""
+        for pid in partner_ids:
+            current = self.reputation.get(pid, _REP_INIT)
+            if coord_this_ep:
+                current = min(1.0, current + _REP_BOOST)
+            else:
+                current = max(0.0, current - _REP_PENALTY)
+            self.reputation[pid] = round(current, 4)
 
     def _try_discover_goal(self):
         if self.sub_goal and self.sub_goal.is_active:
@@ -929,5 +953,8 @@ class ARIAAgent:
                     parent.sub_goal.duration
                 )
                 break
+
+        # Inherit reputation from stronger parent
+        child.reputation = dict(stronger.reputation)
 
         return child, round(w_a, 4), round(w_b, 4)
