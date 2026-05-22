@@ -226,18 +226,50 @@ class Environment:
                 if len(self._msg_buffers[agent_id]) < MAX_MSG_LEN:
                     self._msg_buffers[agent_id].append(token)
 
-        # ── Move agents ────────────────────────────────────────────────────────
-        new_positions = {}
+        # ── Move agents (collision prevention) ────────────────────────────────
+        # Compute desired positions
+        desired = {}
         for agent_id, action in actions.items():
             pos = self.agent_positions[agent_id]
             if action < 4:
                 dx, dy = deltas[action]
                 nx = max(0, min(self.grid_size - 1, pos[0] + dx))
                 ny = max(0, min(self.grid_size - 1, pos[1] + dy))
-                new_positions[agent_id] = (nx, ny)
+                desired[agent_id] = (nx, ny)
             else:
-                new_positions[agent_id] = pos
-        self.agent_positions = new_positions
+                desired[agent_id] = pos  # signalling — stay put
+
+        # Positions held by agents that are not attempting to move
+        stationary_pos = {
+            self.agent_positions[a]
+            for a, act in actions.items() if act >= 4
+        }
+
+        # Resolve: block movers targeting a stationary cell, then block
+        # any two movers competing for the same target
+        movers   = {}
+        resolved = {}
+        for agent_id, action in actions.items():
+            target = desired[agent_id]
+            if action >= 4 or target == self.agent_positions[agent_id]:
+                resolved[agent_id] = self.agent_positions[agent_id]
+            elif target in stationary_pos:
+                resolved[agent_id] = self.agent_positions[agent_id]  # blocked
+            else:
+                movers[agent_id] = target
+
+        # Count how many movers want each target cell
+        target_count = {}
+        for t in movers.values():
+            target_count[t] = target_count.get(t, 0) + 1
+
+        for agent_id, target in movers.items():
+            if target_count[target] > 1:
+                resolved[agent_id] = self.agent_positions[agent_id]  # contested
+            else:
+                resolved[agent_id] = target
+
+        self.agent_positions = resolved
 
         # ── Finite resource: regen depleted nodes ──────────────────────────────
         regen_ready = [p for p, t in self._depleted.items() if t <= 1]
