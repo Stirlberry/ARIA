@@ -56,7 +56,7 @@ class Visualiser:
         self.height = GRID_SIZE * self.cell
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption('ARIA — Adaptive Reasoning and Interaction Agent')
-        self.font_lg = pygame.font.SysFont('monospace', 17, bold=True)
+        self.font_lg = pygame.font.SysFont('monospace', 15, bold=True)
         self.font_md = pygame.font.SysFont('monospace', 13)
         self.font_sm = pygame.font.SysFont('monospace', 11)
         self.signal_history      = []
@@ -154,8 +154,12 @@ class Visualiser:
         px = grid_px + 14
         py = 14
 
+        footer_y = self.height - 40
+
         def blit(s, col, size='md'):
             nonlocal py
+            if py >= footer_y:
+                return
             f = self.font_lg if size == 'lg' else (
                 self.font_md if size == 'md' else self.font_sm)
             surf = f.render(s, True, col)
@@ -163,14 +167,16 @@ class Visualiser:
                 chars = max(1, int(len(s) * (self.width - px - 8) / surf.get_width()))
                 surf  = f.render(s[:chars], True, col)
             self.screen.blit(surf, (px, py))
-            py += 24 if size == 'lg' else (20 if size == 'md' else 16)
+            py += 20 if size == 'lg' else (17 if size == 'md' else 13)
 
         def divider():
             nonlocal py
+            if py >= footer_y:
+                return
             py += 4
             pygame.draw.line(self.screen, PANEL_LINE,
                              (px-4, py), (self.width-8, py), 1)
-            py += 8
+            py += 6
 
         blit('ARIA', WHITE, 'lg')
         blit(f'Gen {generation}  Ep {episode:5d}  Step {step:4d}', MUTED, 'sm')
