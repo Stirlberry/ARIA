@@ -6,7 +6,10 @@ Renders every step at training speed (no FPS cap).
 import os
 import sys
 import pygame
+from collections import deque
 from config import GRID_SIZE, CELL_SIZE
+
+GRAPH_H = 150   # height of reward trend strip below the grid
 
 BG           = (12,  12,  18)
 GRID_CELL    = (22,  22,  32)
@@ -50,11 +53,12 @@ def _agent_colour(agent_id):
 class Visualiser:
     def __init__(self):
         pygame.init()
-        self.cell   = CELL_SIZE
-        grid_px     = GRID_SIZE * self.cell
-        self.width  = grid_px + PANEL_W
-        self.height = GRID_SIZE * self.cell
-        self.screen = pygame.display.set_mode((self.width, self.height))
+        self.cell    = CELL_SIZE
+        grid_px      = GRID_SIZE * self.cell
+        self.width   = grid_px + PANEL_W
+        self.height  = GRID_SIZE * self.cell
+        self.screen  = pygame.display.set_mode((self.width, self.height + GRAPH_H))
+        self.reward_history = {}   # agent_id -> deque of episode rewards
         pygame.display.set_caption('ARIA — Adaptive Reasoning and Interaction Agent')
         self.font_lg = pygame.font.SysFont('monospace', 17, bold=True)
         self.font_md = pygame.font.SysFont('monospace', 13)
@@ -229,6 +233,76 @@ class Visualiser:
             (px, leg_y + 8)
         )
 
+    def record_episode(self, ep_rewards):
+        """Call at the end of each episode to update the reward trend graph."""
+        for agent_id, reward in ep_rewards.items():
+            if agent_id not in self.reward_history:
+                self.reward_history[agent_id] = deque(maxlen=100)
+            self.reward_history[agent_id].append(reward)
+
+    def _draw_graph(self, agents):
+        gx  = 55                      # left margin (y-axis labels)
+        gy  = self.height + 22        # top of plot area
+        gw  = self.width - gx - 90   # plot width (leave room for legend)
+        gh  = GRAPH_H - 42            # plot height (top + bottom margins)
+
+        # Background strip
+        pygame.draw.rect(self.screen, PANEL_BG,
+                         pygame.Rect(0, self.height, self.width, GRAPH_H))
+        pygame.draw.line(self.screen, PANEL_LINE,
+                         (0, self.height), (self.width, self.height), 2)
+
+        title = self.font_sm.render('EPISODE REWARD TREND  (last 100 eps)', True, MUTED)
+        self.screen.blit(title, (gx, self.height + 5))
+
+        # Collect histories for active agents only
+        histories = {
+            aid: list(self.reward_history[aid])
+            for aid in agents
+            if aid in self.reward_history and len(self.reward_history[aid]) > 1
+        }
+        if not histories:
+            return
+
+        # Y scale
+        all_vals = [v for h in histories.values() for v in h]
+        y_min    = min(0.0, min(all_vals))
+        y_max    = max(1.0, max(all_vals))
+        y_range  = y_max - y_min
+
+        def to_px(idx, n, reward):
+            sx = gx + int(idx / max(n - 1, 1) * gw)
+            sy = gy + gh - int((reward - y_min) / y_range * gh)
+            sy = max(gy, min(gy + gh, sy))
+            return sx, sy
+
+        # Zero line
+        if y_min < 0 < y_max:
+            zero_sy = gy + gh - int((0 - y_min) / y_range * gh)
+            pygame.draw.line(self.screen, PANEL_LINE, (gx, zero_sy), (gx + gw, zero_sy), 1)
+
+        # Y-axis labels
+        for val in [y_max, (y_max + y_min) / 2, y_min]:
+            sy = gy + gh - int((val - y_min) / y_range * gh)
+            lbl = self.font_sm.render(f'{val:.0f}', True, MUTED)
+            self.screen.blit(lbl, (gx - lbl.get_width() - 3, sy - 5))
+
+        # Agent lines + legend
+        legend_x = gx + gw + 10
+        legend_y = gy
+        for agent_id, history in histories.items():
+            col    = _agent_colour(agent_id)
+            n      = len(history)
+            points = [to_px(i, n, v) for i, v in enumerate(history)]
+            if len(points) >= 2:
+                pygame.draw.lines(self.screen, col, False, points, 1)
+            tag = self.font_sm.render(agent_id.split('-')[1], True, col)
+            self.screen.blit(tag, (legend_x, legend_y))
+            legend_y += 14
+
+        # Plot border
+        pygame.draw.rect(self.screen, PANEL_LINE, pygame.Rect(gx, gy, gw, gh), 1)
+
     def _do_screenshot(self, episode):
         path = os.path.join('logs', 'screenshots')
         os.makedirs(path, exist_ok=True)
@@ -242,6 +316,7 @@ class Visualiser:
         self.screen.fill(BG)
         self._draw_grid(env)
         self._draw_panel(agents, channel, episode, step, ep_rewards, generation)
+        self._draw_graph(agents)
         pygame.display.flip()
         if self._save_screenshot:
             self._do_screenshot(episode)

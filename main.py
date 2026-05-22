@@ -254,6 +254,8 @@ def main():
                 help_mon.record_episode(agent_id, ep_rewards[agent_id], ep_coord_any)
                 plateau_mon.record(agent_id, ep_rewards[agent_id])
 
+            vis.record_episode(ep_rewards)
+
             # Proactive lexicon analysis every 100 episodes
             lexicon_advisor.maybe_advise(channel, agents, episode, config)
 
