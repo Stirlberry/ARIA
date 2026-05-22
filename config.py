@@ -130,6 +130,7 @@ GOAL_DISCOVERY_BONUS             = 0.3   # fixed bonus for self-discovered goals
 
 # API Budget
 LEXICON_ADVISOR_ON = True   # set False to disable the Lexicon Advisor entirely
+HELP_SYSTEM_ON     = True   # set False to disable the Claude help system entirely
 API_BUDGET_CAP    = 1.00   # USD per session; Claude calls stop if exceeded
 HAIKU_INPUT_COST  = 0.80   # USD per million input tokens  (claude-haiku-4-5)
 HAIKU_OUTPUT_COST = 4.00   # USD per million output tokens (claude-haiku-4-5)

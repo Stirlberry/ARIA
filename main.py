@@ -82,7 +82,15 @@ def main():
     except (EOFError, KeyboardInterrupt):
         la = 'y'
     config.LEXICON_ADVISOR_ON = la not in ('n', 'no')
-    print(f'  Lexicon Advisor : {"ON" if config.LEXICON_ADVISOR_ON else "OFF"}\n')
+    print(f'  Lexicon Advisor : {"ON" if config.LEXICON_ADVISOR_ON else "OFF"}')
+
+    # Help system toggle
+    try:
+        hs = input('  Help system on?     [Y/n]: ').strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        hs = 'y'
+    config.HELP_SYSTEM_ON = hs not in ('n', 'no')
+    print(f'  Help system     : {"ON" if config.HELP_SYSTEM_ON else "OFF"}\n')
 
     start_episode = 1
     meta, npz_data = save_system.prompt_resume()
@@ -158,11 +166,12 @@ def main():
                       f'skip={hp["use_skip"]}\n')
 
             # Help system check
-            struggling = help_mon.check_all(agents, episode)
-            for agent_id, reason in struggling:
-                agent = agents[agent_id]
-                print(f'\n  [Help] {agent_id} struggling ({reason}) at episode {episode}')
-                help_mon.run_help_cycle(agent_id, agent, reason, episode, config)
+            if config.HELP_SYSTEM_ON:
+                struggling = help_mon.check_all(agents, episode)
+                for agent_id, reason in struggling:
+                    agent = agents[agent_id]
+                    print(f'\n  [Help] {agent_id} struggling ({reason}) at episode {episode}')
+                    help_mon.run_help_cycle(agent_id, agent, reason, episode, config)
 
             # Episode setup
             states           = env.reset(agent_ids=list(agents.keys()))
