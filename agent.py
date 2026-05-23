@@ -63,7 +63,7 @@ _TRAIL_DIR_IDX  = 8 + MAX_MSG_LEN      # = 12
 _TRAIL_DIST_IDX = 8 + MAX_MSG_LEN + 1  # = 13
 
 # Observable partner features for Theory of Mind
-_PARTNER_FEATURE_SIZE = 9 + 3 + (N_SIGNALS + 1) * MAX_MSG_LEN  # dir + dist + msg = 32
+_PARTNER_FEATURE_SIZE = 9 + 3 + (N_SIGNALS + 1) * MAX_MSG_LEN  # dir + dist + msg = 80
 
 # visit_counts eviction: evict when dict exceeds this size; keep only entries
 # with count <= threshold (entries above contribute < beta/10 curiosity bonus)
@@ -556,7 +556,7 @@ class ARIAAgent:
 
         self.agent_id  = agent_id
         self.epsilon   = EPSILON_START
-        self.n_actions = 4 + N_SIGNALS
+        self.n_actions = 8 + N_SIGNALS
 
         # Evolvable hyperparameters
         self.learning_rate  = float(learning_rate)  if learning_rate  is not None else LEARNING_RATE
@@ -662,12 +662,6 @@ class ARIAAgent:
         ep_cur     = self.episodic_beta if state not in self._ep_visited else 0.0
         self._ep_visited.add(state)
 
-        # Evict well-explored states to bound memory (count > threshold → negligible curiosity)
-        if len(self.visit_counts) > _VISIT_COUNT_MAX:
-            self.visit_counts = {
-                s: c for s, c in self.visit_counts.items()
-                if c <= _VISIT_COUNT_EVICT_THRESH
-            }
 
         # ── Sub-goal bonus ─────────────────────────────────────────────────────
         sg_bonus = self.sub_goal.bonus(state) if (self.sub_goal and self.sub_goal.is_active) else 0.0
@@ -804,6 +798,11 @@ class ARIAAgent:
         self.episode_reward = 0.0
         self.episodes += 1
         self._ep_visited.clear()
+        if len(self.visit_counts) > _VISIT_COUNT_MAX:
+            self.visit_counts = {
+                s: c for s, c in self.visit_counts.items()
+                if c <= _VISIT_COUNT_EVICT_THRESH
+            }
         self._repl_window.append(ep)
         self._try_discover_goal()
         return ep
@@ -891,7 +890,7 @@ class ARIAAgent:
 
     @staticmethod
     def get_signal_from_action(action):
-        return action - 4 if action >= 4 else None
+        return action - 8 if action >= 8 else None
 
     @staticmethod
     def _cross_hyperparam(val_a, val_b, w_a, lo, hi):

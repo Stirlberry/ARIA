@@ -33,14 +33,16 @@ from budget import cost_tracker
 from environment import Environment
 from agent import ARIAAgent, make_replay_buffer
 from communication import CommunicationChannel
-from genetics import replicate, PlateauMonitor
+from genetics import replicate, kill_weakest, reproduce_pair, PlateauMonitor
 from help_system import HelpMonitor, LexiconAdvisor
 from visualiser import Visualiser
 from config import (
     INITIAL_AGENTS, MAX_EPISODES, MAX_STEPS_PER_EPISODE,
     LEXICON_LOG_PATH,
     MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
-    AUTOSAVE_EVERY, ENV_DRIFT_INTERVAL
+    AUTOSAVE_EVERY, ENV_DRIFT_INTERVAL,
+    MAX_POPULATION, REPRODUCTION_STEPS,
+    CONTACT_WINDOW, CONTACT_COORD_BONUS,
 )
 
 
@@ -119,51 +121,29 @@ def main():
                 env.drift_nodes()
                 print(f'  [Drift] Nodes relocated at episode {episode}')
 
-            # Replication check (external monitor, then agent self-assessment)
-            should_repl, repl_reason = plateau_mon.should_replicate(
-                agents, episode, last_replication_ep
-            )
-            if not should_repl:
-                should_repl, repl_reason = plateau_mon.check_agent_initiated(
+            # ── Death phase: fires when at MAX_POPULATION and plateau triggers ──
+            if len(agents) == MAX_POPULATION:
+                should_kill, kill_reason = plateau_mon.should_replicate(
                     agents, episode, last_replication_ep
                 )
-                if should_repl:
-                    initiator = repl_reason.split()[0]
-                    if initiator in agents:
-                        agents[initiator].record_replication_request(episode)
-            if should_repl:
-                print(f'\n  [Gen {generation}] Replication at episode {episode} '
-                      f'— {repl_reason}')
-                new_agents, new_channel, summary = replicate(
-                    agents, channel, episode, set(all_ids_ever),
-                    shared_replay=shared_replay
-                )
-                all_ids_ever.append(summary['child_id'])
-                generation          += 1
-                last_replication_ep  = episode
-
-                # Deregister retired agent
-                plateau_mon.deregister(summary['retired_id'])
-
-                agents  = new_agents
-                channel = new_channel
-
-                help_mon.register_agent(summary['child_id'])
-                plateau_mon.register(summary['child_id'])
-
-                env.reset(agent_ids=list(agents.keys()))
-                vis.notify_replication(summary)
-
-                hp = summary['child_hyperparams']
-                print(f'  Born    : {summary["child_id"]}')
-                print(f'  Retired : {summary["retired_id"]} '
-                      f'(reward {summary["retired_total_reward"]:.1f})')
-                print(f'  Survived: {summary["surviving_id"]} '
-                      f'(reward {summary["surviving_total_reward"]:.1f})')
-                print(f'  Weights : {summary["weights"]}')
-                print(f'  Hyperparams : lr={hp["lr"]}  '
-                      f'layers={hp["n_layers"]}  act={hp["activation"]}  '
-                      f'skip={hp["use_skip"]}\n')
+                if not should_kill:
+                    should_kill, kill_reason = plateau_mon.check_agent_initiated(
+                        agents, episode, last_replication_ep
+                    )
+                    if should_kill:
+                        initiator = kill_reason.split()[0]
+                        if initiator in agents:
+                            agents[initiator].record_replication_request(episode)
+                if should_kill:
+                    print(f'\n  [Gen {generation}] Death at episode {episode} — {kill_reason}')
+                    agents, death_summary = kill_weakest(agents, episode, set(all_ids_ever))
+                    last_replication_ep = episode
+                    plateau_mon.deregister(death_summary['retired_id'])
+                    help_mon.register_agent(death_summary['retired_id'])  # flush any pending
+                    env.reset(agent_ids=list(agents.keys()))
+                    print(f'  Died    : {death_summary["retired_id"]} '
+                          f'(reward {death_summary["retired_total_reward"]:.1f})')
+                    print(f'  Survivors: {", ".join(agents)}\n')
 
             # Help system check
             if config.HELP_SYSTEM_ON:
@@ -178,6 +158,11 @@ def main():
             ep_rewards       = {a: 0.0 for a in agents}
             ep_coord_any     = False
             last_signal_step = {a: -(config.SIGNAL_WINDOW + 1) for a in agents}
+            contact_log      = {a: -(CONTACT_WINDOW + 1) for a in agents}
+
+            # Proximity tracking for biological reproduction (only when below MAX_POPULATION)
+            pair_proximity   = {}   # (id_a, id_b) -> consecutive steps on same cell
+            repro_pair       = None  # set to (agent_a, agent_b) when threshold reached
 
             for step in range(MAX_STEPS_PER_EPISODE):
 
@@ -202,6 +187,12 @@ def main():
                     for agent_id in agents:
                         if step - last_signal_step[agent_id] <= config.SIGNAL_WINDOW:
                             rewards[agent_id] += config.SIGNAL_REWARD
+                    # Contact coordination bonus: meet → talk → act together
+                    recent = [a for a in info['coord_agents']
+                              if step - contact_log.get(a, -(CONTACT_WINDOW + 1)) <= CONTACT_WINDOW]
+                    if len(recent) >= 2:
+                        for a in recent:
+                            rewards[a] += CONTACT_COORD_BONUS
 
                 # Record individual signals and compound pairs
                 active_sigs = []
@@ -239,8 +230,34 @@ def main():
 
                 states = next_states
 
+                positions  = env.get_positions()
+                agent_list = list(agents.keys())
+
+                # ── Contact tracking: collision + signal → log for both agents ──
+                for i in range(len(agent_list)):
+                    for j in range(i + 1, len(agent_list)):
+                        a_id, b_id = agent_list[i], agent_list[j]
+                        if (positions.get(a_id) == positions.get(b_id) and
+                                (signals_sent.get(a_id) is not None or
+                                 signals_sent.get(b_id) is not None)):
+                            contact_log[a_id] = step
+                            contact_log[b_id] = step
+
+                # ── Proximity: track any pair sharing a cell (reproduction trigger) ──
+                if repro_pair is None and len(agents) < MAX_POPULATION:
+                    for i in range(len(agent_list)):
+                        for j in range(i + 1, len(agent_list)):
+                            a_id, b_id = agent_list[i], agent_list[j]
+                            key = (a_id, b_id)
+                            if positions.get(a_id) == positions.get(b_id):
+                                pair_proximity[key] = pair_proximity.get(key, 0) + 1
+                                if pair_proximity[key] >= REPRODUCTION_STEPS:
+                                    repro_pair = (agents[a_id], agents[b_id])
+                            else:
+                                pair_proximity[key] = 0
+
                 vis.render(env, agents, channel, episode, step,
-                           ep_rewards, generation, all_ids_ever)
+                           ep_rewards, generation)
 
                 if done:
                     break
@@ -255,6 +272,35 @@ def main():
                 plateau_mon.record(agent_id, ep_rewards[agent_id])
 
             vis.record_episode(ep_rewards)
+
+            # ── Reproduction: if a pair stayed together for REPRODUCTION_STEPS ──
+            if repro_pair is not None and len(agents) < MAX_POPULATION:
+                parent_a, parent_b = repro_pair
+                print(f'\n  [Gen {generation}] Reproduction at episode {episode} '
+                      f'— {parent_a.agent_id} + {parent_b.agent_id} met for '
+                      f'{REPRODUCTION_STEPS} steps')
+                agents, new_channel, summary = reproduce_pair(
+                    parent_a, parent_b, agents, channel, episode,
+                    set(all_ids_ever), shared_replay=shared_replay
+                )
+                all_ids_ever.append(summary['child_id'])
+                generation          += 1
+                last_replication_ep  = episode
+                channel              = new_channel
+
+                help_mon.register_agent(summary['child_id'])
+                plateau_mon.register(summary['child_id'])
+
+                env.reset(agent_ids=list(agents.keys()))
+                vis.notify_replication(summary)
+
+                hp = summary['child_hyperparams']
+                print(f'  Born    : {summary["child_id"]}')
+                print(f'  Parents : {parent_a.agent_id} + {parent_b.agent_id}')
+                print(f'  Weights : {summary["weights"]}')
+                print(f'  Hyperparams : lr={hp["lr"]}  '
+                      f'layers={hp["n_layers"]}  act={hp["activation"]}  '
+                      f'skip={hp["use_skip"]}\n')
 
             # Proactive lexicon analysis every 100 episodes
             lexicon_advisor.maybe_advise(channel, agents, episode, config)

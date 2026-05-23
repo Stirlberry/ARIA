@@ -194,11 +194,19 @@ class Visualiser:
 
         divider()
 
-        blit('LEXICON', WHITE, 'md')
-        for entry in channel.get_lexicon_summary().values():
-            col  = GOLD if entry['assigned'] else MUTED
-            blit(f'  {entry["symbol"]:5s}  use:{entry["use_count"]:5d}'
-                 f'  coord:{entry["coord_successes"]:4d}', col, 'sm')
+        lex_summary  = channel.get_lexicon_summary()
+        n_assigned   = sum(1 for e in lex_summary.values() if e['assigned'])
+        blit(f'LEXICON  {n_assigned}/{len(lex_summary)} crystallised', WHITE, 'md')
+        active = sorted(
+            [e for e in lex_summary.values() if e['coord_successes'] > 0],
+            key=lambda e: e['coord_successes'], reverse=True
+        )
+        if active:
+            for entry in active[:4]:
+                blit(f'  {entry["symbol"]:5s}  coord:{entry["coord_successes"]:4d}',
+                     GOLD, 'sm')
+        else:
+            blit('  no coord signal yet', MUTED, 'sm')
 
         n_compound = channel.compound_lexicon.crystallised_count()
         blit(f'COMPOUNDS  [{n_compound} crystallised]', WHITE, 'md')
@@ -240,11 +248,13 @@ class Visualiser:
                 self.reward_history[agent_id] = deque(maxlen=100)
             self.reward_history[agent_id].append(reward)
 
-    def _draw_graph(self, agents):
-        gx  = 55                      # left margin (y-axis labels)
-        gy  = self.height + 22        # top of plot area
-        gw  = self.width - gx - 90   # plot width (leave room for legend)
-        gh  = GRAPH_H - 42            # plot height (top + bottom margins)
+    def _draw_graph(self, agents, channel):
+        LINE_SECTION = 460   # px allocated to line chart
+        BAR_SECTION  = 180   # px allocated to reward bars
+        # lexicon takes the remainder (~320px for 16 hex signal bars)
+
+        gy = self.height + 22   # top of plot area
+        gh = GRAPH_H - 42       # plot height
 
         # Background strip
         pygame.draw.rect(self.screen, PANEL_BG,
@@ -252,56 +262,136 @@ class Visualiser:
         pygame.draw.line(self.screen, PANEL_LINE,
                          (0, self.height), (self.width, self.height), 2)
 
+        # Section dividers
+        pygame.draw.line(self.screen, PANEL_LINE,
+                         (LINE_SECTION, self.height + 1),
+                         (LINE_SECTION, self.height + GRAPH_H), 1)
+        pygame.draw.line(self.screen, PANEL_LINE,
+                         (LINE_SECTION + BAR_SECTION, self.height + 1),
+                         (LINE_SECTION + BAR_SECTION, self.height + GRAPH_H), 1)
+
+        # ── 1. LINE CHART ────────────────────────────────────────────
+        gx = 55
+        gw = LINE_SECTION - gx - 15
+
         title = self.font_sm.render('EPISODE REWARD TREND  (last 100 eps)', True, MUTED)
         self.screen.blit(title, (gx, self.height + 5))
 
-        # Collect histories for active agents only
         histories = {
             aid: list(self.reward_history[aid])
             for aid in agents
             if aid in self.reward_history and len(self.reward_history[aid]) > 1
         }
-        if not histories:
-            return
 
-        # Y scale
-        all_vals = [v for h in histories.values() for v in h]
-        y_min    = min(0.0, min(all_vals))
-        y_max    = max(1.0, max(all_vals))
-        y_range  = y_max - y_min
+        if histories:
+            all_vals = [v for h in histories.values() for v in h]
+            y_min    = min(0.0, min(all_vals))
+            y_max    = max(1.0, max(all_vals))
+            y_range  = y_max - y_min
 
-        def to_px(idx, n, reward):
-            sx = gx + int(idx / max(n - 1, 1) * gw)
-            sy = gy + gh - int((reward - y_min) / y_range * gh)
-            sy = max(gy, min(gy + gh, sy))
-            return sx, sy
+            def to_px(idx, n, reward):
+                sx = gx + int(idx / max(n - 1, 1) * gw)
+                sy = gy + gh - int((reward - y_min) / y_range * gh)
+                sy = max(gy, min(gy + gh, sy))
+                return sx, sy
 
-        # Zero line
-        if y_min < 0 < y_max:
-            zero_sy = gy + gh - int((0 - y_min) / y_range * gh)
-            pygame.draw.line(self.screen, PANEL_LINE, (gx, zero_sy), (gx + gw, zero_sy), 1)
+            if y_min < 0 < y_max:
+                zero_sy = gy + gh - int((0 - y_min) / y_range * gh)
+                pygame.draw.line(self.screen, PANEL_LINE,
+                                 (gx, zero_sy), (gx + gw, zero_sy), 1)
 
-        # Y-axis labels
-        for val in [y_max, (y_max + y_min) / 2, y_min]:
-            sy = gy + gh - int((val - y_min) / y_range * gh)
-            lbl = self.font_sm.render(f'{val:.0f}', True, MUTED)
-            self.screen.blit(lbl, (gx - lbl.get_width() - 3, sy - 5))
+            for val in [y_max, (y_max + y_min) / 2, y_min]:
+                sy  = gy + gh - int((val - y_min) / y_range * gh)
+                lbl = self.font_sm.render(f'{val:.0f}', True, MUTED)
+                self.screen.blit(lbl, (gx - lbl.get_width() - 3, sy - 5))
 
-        # Agent lines + legend
-        legend_x = gx + gw + 10
-        legend_y = gy
-        for agent_id, history in histories.items():
+            for agent_id, history in histories.items():
+                col    = _agent_colour(agent_id)
+                n      = len(history)
+                points = [to_px(i, n, v) for i, v in enumerate(history)]
+                if len(points) >= 2:
+                    pygame.draw.lines(self.screen, col, False, points, 1)
+
+            pygame.draw.rect(self.screen, PANEL_LINE, pygame.Rect(gx, gy, gw, gh), 1)
+
+        # ── 2. TOTAL REWARD BAR CHART ────────────────────────────────
+        rx = LINE_SECTION + 12
+        rw = BAR_SECTION - 24
+
+        self.screen.blit(
+            self.font_sm.render('TOTAL REWARD', True, MUTED),
+            (rx, self.height + 5)
+        )
+
+        agent_list    = list(agents.items())
+        n_agents      = len(agent_list)
+        total_rewards = [max(0.0, ag.total_reward) for _, ag in agent_list]
+        max_total     = max(max(total_rewards), 1.0)
+
+        bar_gap    = 5
+        bar_w_each = max(4, (rw - (n_agents - 1) * bar_gap) // n_agents)
+
+        for i, (agent_id, agent) in enumerate(agent_list):
             col    = _agent_colour(agent_id)
-            n      = len(history)
-            points = [to_px(i, n, v) for i, v in enumerate(history)]
-            if len(points) >= 2:
-                pygame.draw.lines(self.screen, col, False, points, 1)
-            tag = self.font_sm.render(agent_id.split('-')[1], True, col)
-            self.screen.blit(tag, (legend_x, legend_y))
-            legend_y += 14
+            bx     = rx + i * (bar_w_each + bar_gap)
+            reward = max(0.0, agent.total_reward)
+            fill_h = max(2, int(reward / max_total * gh))
+            by     = gy + gh - fill_h
 
-        # Plot border
-        pygame.draw.rect(self.screen, PANEL_LINE, pygame.Rect(gx, gy, gw, gh), 1)
+            pygame.draw.rect(self.screen, col,
+                             pygame.Rect(bx, by, bar_w_each, fill_h))
+            pygame.draw.rect(self.screen, PANEL_LINE,
+                             pygame.Rect(bx, gy, bar_w_each, gh), 1)
+
+            tag = self.font_sm.render(agent_id.split('-')[1], True, col)
+            self.screen.blit(tag, (bx + bar_w_each // 2 - tag.get_width() // 2,
+                                   gy + gh + 2))
+
+            val_lbl = self.font_sm.render(f'{agent.total_reward:.0f}', True, col)
+            val_y   = by - 13
+            if val_y >= gy:
+                self.screen.blit(val_lbl,
+                                 (bx + bar_w_each // 2 - val_lbl.get_width() // 2, val_y))
+
+        # ── 3. LEXICON SIGNAL BAR CHART ──────────────────────────────
+        lx = LINE_SECTION + BAR_SECTION + 12
+        lw = self.width - lx - 8
+
+        self.screen.blit(
+            self.font_sm.render('LEXICON SIGNALS', True, MUTED),
+            (lx, self.height + 5)
+        )
+
+        lex_entries = list(channel.get_lexicon_summary().values())
+        n_lex       = len(lex_entries)
+        if n_lex > 0:
+            max_use   = max((e['use_count'] for e in lex_entries), default=1)
+            max_use   = max(max_use, 1)
+            lex_gap   = 2
+            lex_bar_w = max(4, (lw - (n_lex - 1) * lex_gap) // n_lex)
+
+            for i, entry in enumerate(lex_entries):
+                col    = GOLD if entry['assigned'] else MUTED
+                bx     = lx + i * (lex_bar_w + lex_gap)
+                fill_h = max(2, int(entry['use_count'] / max_use * gh))
+                by     = gy + gh - fill_h
+
+                pygame.draw.rect(self.screen, col,
+                                 pygame.Rect(bx, by, lex_bar_w, fill_h))
+                pygame.draw.rect(self.screen, PANEL_LINE,
+                                 pygame.Rect(bx, gy, lex_bar_w, gh), 1)
+
+                # white tick showing coordination success ratio
+                if entry['use_count'] > 0:
+                    ratio  = entry['coord_successes'] / entry['use_count']
+                    tick_y = gy + gh - int(ratio * gh)
+                    pygame.draw.line(self.screen, WHITE,
+                                     (bx, tick_y), (bx + lex_bar_w, tick_y), 1)
+
+                # single hex digit label (0-F) below bar
+                hex_lbl = self.font_sm.render(format(entry['signal_idx'], 'X'), True, col)
+                self.screen.blit(hex_lbl, (bx + lex_bar_w // 2 - hex_lbl.get_width() // 2,
+                                           gy + gh + 2))
 
     def _do_screenshot(self, episode):
         path = os.path.join('logs', 'screenshots')
@@ -311,12 +401,12 @@ class Visualiser:
         print(f'  [Screenshot] Saved → {filename}')
 
     def render(self, env, agents, channel, episode, step,
-               ep_rewards, generation, all_ids_ever):
+               ep_rewards, generation):
         self.handle_events()
         self.screen.fill(BG)
         self._draw_grid(env)
         self._draw_panel(agents, channel, episode, step, ep_rewards, generation)
-        self._draw_graph(agents)
+        self._draw_graph(agents, channel)
         pygame.display.flip()
         if self._save_screenshot:
             self._do_screenshot(episode)

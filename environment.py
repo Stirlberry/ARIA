@@ -114,10 +114,10 @@ class Environment:
         return int((angle + np.pi) / (2 * np.pi) * 8) % 8
 
     def _nearest_dist_bin(self, from_pos, node_set):
-        """Manhattan distance to nearest node, bucketed: 0=close(≤3), 1=mid(4-8), 2=far(>8)."""
+        """Chebyshev distance to nearest node, bucketed: 0=close(≤3), 1=mid(4-8), 2=far(>8)."""
         if not node_set:
             return 0
-        dist = min(abs(n[0] - from_pos[0]) + abs(n[1] - from_pos[1]) for n in node_set)
+        dist = min(max(abs(n[0] - from_pos[0]), abs(n[1] - from_pos[1])) for n in node_set)
         if dist <= 3:
             return 0
         if dist <= 8:
@@ -130,7 +130,7 @@ class Environment:
         if not others:
             return None
         return min(others,
-                   key=lambda x: abs(x[1][0] - pos[0]) + abs(x[1][1] - pos[1]))[0]
+                   key=lambda x: max(abs(x[1][0] - pos[0]), abs(x[1][1] - pos[1])))[0]
 
     def _nearest_marker_dir_dist(self, pos):
         """
@@ -149,7 +149,7 @@ class Environment:
         if len(xs) == 0:
             return 8, 0
 
-        dists   = np.abs(xs - x) + np.abs(ys - y)
+        dists   = np.maximum(np.abs(xs - x), np.abs(ys - y))
         i       = int(dists.argmin())
         dx      = int(xs[i]) - x
         dy      = int(ys[i]) - y
@@ -175,8 +175,17 @@ class Environment:
         partner_dist  = (self._nearest_dist_bin(pos, {self.agent_positions[nearest]})
                          if nearest else 0)
 
-        if nearest and nearest in self._last_msgs:
-            received = tuple(self._last_msgs[nearest])
+        # Messages received from agents within 1 cell — nearest heard first.
+        # Contact bonus still requires same-cell collision (tracked in main.py).
+        nearby = sorted(
+            [a for a in self.agent_ids if a != agent_id
+             and max(abs(self.agent_positions[a][0] - pos[0]),
+                     abs(self.agent_positions[a][1] - pos[1])) <= 1],
+            key=lambda a: max(abs(self.agent_positions[a][0] - pos[0]),
+                              abs(self.agent_positions[a][1] - pos[1]))
+        )
+        if nearby and nearby[0] in self._last_msgs:
+            received = tuple(self._last_msgs[nearby[0]])
         else:
             received = (_NO_SIGNAL,) * MAX_MSG_LEN
 
@@ -208,13 +217,14 @@ class Environment:
         self.steps += 1
         rewards = {a: REWARD_STEP for a in self.agent_ids}
         info    = {'coord_achieved': False, 'currency_collected': [],
-                   'messages_sent': {}}
+                   'messages_sent': {}, 'coord_agents': []}
 
-        deltas = [(0, -1), (0, 1), (1, 0), (-1, 0)]   # N S E W
+        deltas = [(0, -1), (0, 1), (1, 0), (-1, 0),    # N S E W
+                  (1, -1), (-1, -1), (1, 1), (-1, 1)]  # NE NW SE SW
 
         # ── Message buffers ────────────────────────────────────────────────────
         for agent_id, action in actions.items():
-            if action < 4:
+            if action < 8:
                 buf = self._msg_buffers[agent_id]
                 if buf:
                     padded = buf + [_NO_SIGNAL] * (MAX_MSG_LEN - len(buf))
@@ -222,54 +232,22 @@ class Environment:
                     info['messages_sent'][agent_id] = list(buf)
                     self._msg_buffers[agent_id]    = []
             else:
-                token = action - 4
+                token = action - 8
                 if len(self._msg_buffers[agent_id]) < MAX_MSG_LEN:
                     self._msg_buffers[agent_id].append(token)
 
-        # ── Move agents (collision prevention) ────────────────────────────────
-        # Compute desired positions
-        desired = {}
+        # ── Move agents ────────────────────────────────────────────────────────
+        new_positions = {}
         for agent_id, action in actions.items():
             pos = self.agent_positions[agent_id]
-            if action < 4:
+            if action < 8:
                 dx, dy = deltas[action]
                 nx = max(0, min(self.grid_size - 1, pos[0] + dx))
                 ny = max(0, min(self.grid_size - 1, pos[1] + dy))
-                desired[agent_id] = (nx, ny)
+                new_positions[agent_id] = (nx, ny)
             else:
-                desired[agent_id] = pos  # signalling — stay put
-
-        # Positions held by agents that are not attempting to move
-        stationary_pos = {
-            self.agent_positions[a]
-            for a, act in actions.items() if act >= 4
-        }
-
-        # Resolve: block movers targeting a stationary cell, then block
-        # any two movers competing for the same target
-        movers   = {}
-        resolved = {}
-        for agent_id, action in actions.items():
-            target = desired[agent_id]
-            if action >= 4 or target == self.agent_positions[agent_id]:
-                resolved[agent_id] = self.agent_positions[agent_id]
-            elif target in stationary_pos:
-                resolved[agent_id] = self.agent_positions[agent_id]  # blocked
-            else:
-                movers[agent_id] = target
-
-        # Count how many movers want each target cell
-        target_count = {}
-        for t in movers.values():
-            target_count[t] = target_count.get(t, 0) + 1
-
-        for agent_id, target in movers.items():
-            if target_count[target] > 1:
-                resolved[agent_id] = self.agent_positions[agent_id]  # contested
-            else:
-                resolved[agent_id] = target
-
-        self.agent_positions = resolved
+                new_positions[agent_id] = pos
+        self.agent_positions = new_positions
 
         # ── Finite resource: regen depleted nodes ──────────────────────────────
         regen_ready = [p for p, t in self._depleted.items() if t <= 1]
@@ -300,13 +278,14 @@ class Environment:
         # ── Coordination ───────────────────────────────────────────────────────
         for coord_pos in list(self.coord_nodes):
             near = [a for a in self.agent_ids
-                    if abs(self.agent_positions[a][0] - coord_pos[0])
-                    + abs(self.agent_positions[a][1] - coord_pos[1]) <= 1]
+                    if max(abs(self.agent_positions[a][0] - coord_pos[0]),
+                           abs(self.agent_positions[a][1] - coord_pos[1])) <= 1]
             if len(near) >= MIN_COORD_AGENTS:
                 self.coord_nodes.discard(coord_pos)
                 for a in near:
                     rewards[a] += REWARD_COORD
                 info['coord_achieved'] = True
+                info['coord_agents'].extend(near)
                 # Stigmergy: strong marker at coordination point and agent positions
                 self._place_marker(coord_pos, MARKER_STRENGTH_COORD)
                 for a in near:

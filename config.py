@@ -10,7 +10,7 @@ N_CURRENCY_NODES = 14
 N_COORD_NODES    = 4
 
 # Communication
-N_SIGNALS = 4
+N_SIGNALS = 16
 SIGNAL_MEMORY = 2          # kept for reference; state now uses MAX_MSG_LEN
 MAX_MSG_LEN = 4            # max tokens per variable-length message
 UNASSIGNED_SYMBOL = '[?]'
@@ -68,7 +68,8 @@ AUTOSAVE_EVERY        = 500
 # Population
 INITIAL_AGENTS   = ['ARIA-CAFE', 'ARIA-BABE', 'ARIA-DEAD', 'ARIA-BEEF']
 MAX_POPULATION   = 4
-MIN_COORD_AGENTS = 3       # any 3 agents near a coord node triggers coordination
+MIN_COORD_AGENTS    = 3    # any 3 agents near a coord node triggers coordination
+REPRODUCTION_STEPS  = 7    # consecutive steps two agents must share a cell to reproduce
 
 # Replication
 MUTATION_STD             = 0.02
@@ -96,6 +97,10 @@ CURRENCY_REGEN_STEPS   = 200    # steps before a depleted node refills
 SELF_REPL_WINDOW      = 30      # episode window for self-assessment
 SELF_REPL_COOLDOWN    = 80      # min episodes between self-requests
 SELF_REPL_FITNESS_MIN = 1.1     # must be this × population mean to self-replicate
+
+# Contact coordination bonus (meet → talk → act together)
+CONTACT_WINDOW      = 40    # steps a collision+signal stays "fresh"
+CONTACT_COORD_BONUS = 20.0  # bonus on top of REWARD_COORD for teams that met and talked
 
 # Help system
 HELP_WINDOW        = 30

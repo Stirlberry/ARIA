@@ -21,10 +21,10 @@ import urllib.error
 from collections import deque
 from datetime import datetime
 
+import config
 from config import (
     HELP_WINDOW, HELP_REWARD_THRESH, HELP_COORD_THRESH,
     HELP_MIN_EPISODE, HELP_COOLDOWN, HELP_LOG_PATH, SUBGOAL_LOG_PATH,
-    LEXICON_ADVISOR_ON,
 )
 from budget import cost_tracker
 
@@ -485,7 +485,7 @@ class LexiconAdvisor:
         self.last_advice_ep = 0
 
     def maybe_advise(self, channel, agents, episode, config_module):
-        if not LEXICON_ADVISOR_ON:
+        if not config.LEXICON_ADVISOR_ON:
             return
         if not ANTHROPIC_API_KEY:
             return

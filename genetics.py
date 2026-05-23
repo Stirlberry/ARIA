@@ -109,6 +109,65 @@ def next_agent_id(parent_a_id, parent_b_id, all_ids_ever):
     raise RuntimeError('Exhausted all 4-digit hex agent IDs')
 
 
+def kill_weakest(agents, episode, all_ids_ever):
+    """
+    Remove the weakest agent from the population (death phase).
+    Returns (reduced_agents, death_summary). Population drops by 1.
+    """
+    dying = min(agents.values(), key=lambda a: a.total_reward)
+    summary = {
+        'retired_id':           dying.agent_id,
+        'episode':              episode,
+        'retired_total_reward': round(dying.total_reward, 2),
+        'reason':               'natural_death',
+    }
+    _save_retired(dying, summary)
+    _log_death(dying, episode)
+    new_agents = {a.agent_id: a for a in agents.values()
+                  if a.agent_id != dying.agent_id}
+    return new_agents, summary
+
+
+def reproduce_pair(parent_a, parent_b, agents, channel, episode,
+                   all_ids_ever, shared_replay=None):
+    """
+    Create a child from two agents who met on the grid for REPRODUCTION_STEPS
+    consecutive steps. Returns (new_agents, new_channel, summary).
+    """
+    child_id        = next_agent_id(parent_a.agent_id, parent_b.agent_id, all_ids_ever)
+    child, w_a, w_b = ARIAAgent.merge(parent_a, parent_b, child_id,
+                                      shared_replay=shared_replay)
+
+    child_channel = CommunicationChannel(append_log=True)
+    child_channel.inherit_from(channel)
+
+    summary = {
+        'retired_id':             '',
+        'surviving_id':           parent_a.agent_id,
+        'child_id':               child_id,
+        'episode':                episode,
+        'weights':                {parent_a.agent_id: w_a, parent_b.agent_id: w_b},
+        'retired_total_reward':   0,
+        'surviving_total_reward': round(parent_a.total_reward, 2),
+        'child_hyperparams': {
+            'lr':         round(child.learning_rate,  6),
+            'eps_d':      round(child.epsilon_decay,  4),
+            'β_g':        round(child.intrinsic_beta, 4),
+            'β_e':        round(child.episodic_beta,  4),
+            'h':          int(child.hidden_size),
+            'n_layers':   int(child.n_layers),
+            'activation': child.activation,
+            'use_skip':   bool(child.use_skip),
+        }
+    }
+
+    _log_replication(summary)
+
+    new_agents = dict(agents)
+    new_agents[child_id] = child
+    return new_agents, child_channel, summary
+
+
 def replicate(agents, channel, episode, all_ids_ever, shared_replay=None):
     """
     Select top 2 agents as parents, retire the worst, create a child.
@@ -190,6 +249,18 @@ def _save_retired(agent, summary):
     }
     with open(path, 'w') as f:
         json.dump(record, f, indent=2)
+
+
+def _log_death(agent, episode):
+    record = {
+        'event':        'death',
+        'timestamp':    datetime.now().isoformat(),
+        'agent_id':     agent.agent_id,
+        'episode':      episode,
+        'total_reward': round(agent.total_reward, 2),
+    }
+    with open(LEXICON_LOG_PATH, 'a') as f:
+        f.write(json.dumps(record) + '\n')
 
 
 def _log_replication(summary):
