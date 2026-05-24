@@ -79,7 +79,7 @@ MIN_COORD_AGENTS     = 2    # any 2 agents on a CO node triggers coordination
 # Energy system (Phase 3)
 ENERGY_START         = 500   # starting energy for all new agents
 ENERGY_MAX           = 500   # maximum energy cap — agents cannot exceed this
-ENERGY_NEWBORN       = 150   # starting energy for agents born via reproduction
+ENERGY_NEWBORN       = 200   # starting energy for agents born via reproduction
 ENERGY_DRAIN_LOW     = 0.3   # passive energy drain per step (low drain rate)
 ENERGY_DRAIN_MED     = 0.5   # passive energy drain per step (medium drain rate)
 ENERGY_DRAIN_HIGH    = 0.7   # passive energy drain per step (high drain rate)
