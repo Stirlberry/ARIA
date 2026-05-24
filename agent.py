@@ -50,7 +50,6 @@ from config import (
     POTENTIAL_COORD_WEIGHT, POTENTIAL_CURRENCY_WEIGHT,
     TOM_LR, TOM_POS_WEIGHT, TOM_INTENT_THRESHOLD, TOM_BONUS_SCALE,
     PLATEAU_DELTA_THRESH,
-    SELF_REPL_WINDOW, SELF_REPL_COOLDOWN, SELF_REPL_FITNESS_MIN,
     ENERGY_START, ENERGY_MAX, ENERGY_NEWBORN,
     ENERGY_DRAIN_LOW, ENERGY_DRAIN_MED, ENERGY_DRAIN_HIGH,
 )
@@ -614,10 +613,6 @@ class ARIAAgent:
         # Reputation — per-partner trust scores {agent_id: float in [0,1]}
         self.reputation = {}
 
-        # Agent-initiated replication
-        self._repl_window     = deque(maxlen=SELF_REPL_WINDOW)
-        self._repl_request_ep = -SELF_REPL_COOLDOWN
-
         # Specialisation
         self.coord_reward_total    = 0.0
         self.currency_reward_total = 0.0
@@ -800,7 +795,6 @@ class ARIAAgent:
                 s: c for s, c in self.visit_counts.items()
                 if c <= _VISIT_COUNT_EVICT_THRESH
             }
-        self._repl_window.append(ep)
         self._try_discover_goal()
         return ep
 
@@ -839,26 +833,6 @@ class ARIAAgent:
             f.write(json.dumps(record) + '\n')
         print(f'\n  [Goal] {self.agent_id} discovered: {spec["condition"]} '
               f'(lift={lift:.2f})')
-
-    def assess_replication_readiness(self, episode, population_rewards):
-        """
-        Return True if this agent should self-request replication.
-        Criteria: window is full, recent mean exceeds population mean by
-        SELF_REPL_FITNESS_MIN, and cooldown has elapsed.
-        population_rewards: list of recent-episode mean rewards for all agents.
-        """
-        if len(self._repl_window) < SELF_REPL_WINDOW:
-            return False
-        if episode - self._repl_request_ep < SELF_REPL_COOLDOWN:
-            return False
-        if not population_rewards:
-            return False
-        own_mean = np.mean(list(self._repl_window))
-        pop_mean = np.mean(population_rewards)
-        return own_mean >= SELF_REPL_FITNESS_MIN * pop_mean
-
-    def record_replication_request(self, episode):
-        self._repl_request_ep = episode
 
     def rebuild_optimizer(self):
         self.optimizer = optim.Adam(self.online_net.parameters(), lr=self.learning_rate)

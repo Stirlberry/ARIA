@@ -73,7 +73,6 @@ AUTOSAVE_EVERY        = 30
 
 # Population
 INITIAL_AGENTS   = ['ARIA-CAFE', 'ARIA-BABE', 'ARIA-DEAD', 'ARIA-BEEF']
-MIN_POPULATION       = 2    # population floor
 MAX_POPULATION       = 8    # population ceiling
 MIN_COORD_AGENTS     = 2    # any 2 agents on a CO node triggers coordination
 
@@ -119,11 +118,6 @@ FOG_RADIUS    = 5              # Chebyshev radius; nodes and agents beyond this 
 # Communication ranges (Phase 3)
 CHATTER_RANGE = 1              # adjacent only (Chebyshev distance ≤ 1)
 SHOUT_RANGE   = FOG_RADIUS - 2 # broadcast range = 3; less than fog so agents must close the gap
-
-# Agent-initiated replication
-SELF_REPL_WINDOW      = 30      # episode window for self-assessment
-SELF_REPL_COOLDOWN    = 80      # min episodes between self-requests
-SELF_REPL_FITNESS_MIN = 1.1     # must be this × population mean to self-replicate
 
 # Contact coordination bonus (meet → talk → act together)
 CONTACT_WINDOW      = 40    # steps a collision+signal stays "fresh"

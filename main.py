@@ -157,14 +157,6 @@ def main():
                 should_kill, kill_reason = plateau_mon.should_replicate(
                     agents, episode, last_replication_ep
                 )
-                if not should_kill:
-                    should_kill, kill_reason = plateau_mon.check_agent_initiated(
-                        agents, episode, last_replication_ep
-                    )
-                    if should_kill:
-                        initiator = kill_reason.split()[0]
-                        if initiator in agents:
-                            agents[initiator].record_replication_request(episode)
                 if should_kill:
                     print(f'\n  [Gen {generation}] Death at episode {episode} — {kill_reason}')
                     agents, death_summary = kill_weakest(agents, episode)

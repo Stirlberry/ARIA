@@ -54,7 +54,6 @@ def save_checkpoint(episode, agents, channel, generation,
             'cultural_memory': agent.cultural_memory.to_list(),
             'sub_goal':       agent.sub_goal.to_dict() if agent.sub_goal else None,
             'tom_steps':       int(agent._tom_steps),
-            'repl_request_ep': int(agent._repl_request_ep),
             'reputation':           dict(agent.reputation),
             'coord_reward_total':   round(float(agent.coord_reward_total), 4),
             'currency_reward_total': round(float(agent.currency_reward_total), 4),
@@ -198,7 +197,6 @@ def restore(meta, pt_path, shared_replay=None):
         agent.total_reward           = float(am['total_reward'])
         agent.episodes               = int(am['episodes'])
         agent._tom_steps             = int(am.get('tom_steps', 0))
-        agent._repl_request_ep       = int(am.get('repl_request_ep', -9999))
         agent.reputation             = dict(am.get('reputation', {}))
         agent.coord_reward_total     = float(am.get('coord_reward_total', 0.0))
         agent.currency_reward_total  = float(am.get('currency_reward_total', 0.0))

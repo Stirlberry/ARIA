@@ -18,7 +18,7 @@ from config import (
     LEXICON_LOG_PATH, RETIRED_LOG_PATH,
     PLATEAU_WINDOW, PLATEAU_DELTA_THRESH,
     MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
-    MIN_POPULATION, MAX_POPULATION, SELF_REPL_FITNESS_MIN,
+    MAX_POPULATION,
 )
 
 
@@ -65,28 +65,6 @@ class PlateauMonitor:
         for agent_id in agents:
             if self.is_plateauing(agent_id):
                 return True, f'{agent_id} plateau'
-
-        return False, ''
-
-    def check_agent_initiated(self, agents, episode, last_replication_ep):
-        """
-        Returns (trigger: bool, reason: str) when a high-fitness agent requests
-        self-replication. Checks each agent's own assessment against the
-        population mean of their recent-window rewards.
-        """
-        since_last = episode - last_replication_ep
-        if since_last < MIN_REPLICATION_INTERVAL:
-            return False, ''
-
-        pop_means = []
-        for a in agents.values():
-            w = list(a._repl_window)
-            if w:
-                pop_means.append(float(sum(w) / len(w)))
-
-        for agent_id, agent in agents.items():
-            if agent.assess_replication_readiness(episode, pop_means):
-                return True, f'{agent_id} self-requested'
 
         return False, ''
 
