@@ -80,14 +80,14 @@ MIN_COORD_AGENTS     = 2    # any 2 agents on a CO node triggers coordination
 ENERGY_START         = 500   # starting energy for all new agents
 ENERGY_MAX           = 500   # maximum energy cap — agents cannot exceed this
 ENERGY_NEWBORN       = 150   # starting energy for agents born via reproduction
-ENERGY_DRAIN_LOW     = 0.5   # passive energy drain per step (low drain rate)
-ENERGY_DRAIN_MED     = 1.0   # passive energy drain per step (medium drain rate)
-ENERGY_DRAIN_HIGH    = 1.5   # passive energy drain per step (high drain rate)
+ENERGY_DRAIN_LOW     = 0.3   # passive energy drain per step (low drain rate)
+ENERGY_DRAIN_MED     = 0.5   # passive energy drain per step (medium drain rate)
+ENERGY_DRAIN_HIGH    = 0.7   # passive energy drain per step (high drain rate)
 ENERGY_FROM_CURRENCY = 40    # energy gained from consuming a currency node
 ENERGY_FROM_CO       = 120   # energy gained per agent from consuming a CO node
 
 # Survival and reproduction (Phase 3)
-REPRODUCTION_THRESHOLD = 120  # both agents must be above this energy level to reproduce
+REPRODUCTION_THRESHOLD = 250  # both agents must be above this energy level to reproduce
 REPRODUCTION_COST      = 120  # energy deducted from each parent on reproduction
 CO_HOLD_MAX_STEPS      = 50   # max steps an agent waits at a CO node for a partner
 SPAWN_PAUSE_STEPS      = 40   # steps parents freeze at birth point before separating
