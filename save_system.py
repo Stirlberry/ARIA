@@ -49,11 +49,15 @@ def save_checkpoint(episode, agents, channel, generation,
             'n_layers':       int(agent.n_layers),
             'activation':     agent.activation,
             'use_skip':       bool(agent.use_skip),
+            'energy':          round(float(agent.energy),    4),
+            'drain_rate':      round(float(agent.drain_rate), 4),
             'cultural_memory': agent.cultural_memory.to_list(),
             'sub_goal':       agent.sub_goal.to_dict() if agent.sub_goal else None,
             'tom_steps':       int(agent._tom_steps),
             'repl_request_ep': int(agent._repl_request_ep),
-            'reputation':      dict(agent.reputation),
+            'reputation':           dict(agent.reputation),
+            'coord_reward_total':   round(float(agent.coord_reward_total), 4),
+            'currency_reward_total': round(float(agent.currency_reward_total), 4),
         }
 
     torch.save(weights, pt_path)
@@ -167,6 +171,8 @@ def restore(meta, pt_path, shared_replay=None):
             n_layers        = int(am.get('n_layers',          N_LAYERS_DEFAULT)),
             activation      = am.get('activation',            'relu'),
             use_skip        = bool(am.get('use_skip',         False)),
+            energy          = float(am.get('energy',          100.0)),
+            drain_rate      = float(am.get('drain_rate',      1.0)),
             online_state_dict = weights.get(key),
             cultural_memory = cultural_memory,
             sub_goal        = sub_goal,
@@ -188,12 +194,14 @@ def restore(meta, pt_path, shared_replay=None):
             except Exception:
                 pass  # architecture mismatch — ToM starts fresh
 
-        agent.epsilon           = float(am['epsilon'])
-        agent.total_reward      = float(am['total_reward'])
-        agent.episodes          = int(am['episodes'])
-        agent._tom_steps        = int(am.get('tom_steps', 0))
-        agent._repl_request_ep  = int(am.get('repl_request_ep', -9999))
-        agent.reputation        = dict(am.get('reputation', {}))
+        agent.epsilon                = float(am['epsilon'])
+        agent.total_reward           = float(am['total_reward'])
+        agent.episodes               = int(am['episodes'])
+        agent._tom_steps             = int(am.get('tom_steps', 0))
+        agent._repl_request_ep       = int(am.get('repl_request_ep', -9999))
+        agent.reputation             = dict(am.get('reputation', {}))
+        agent.coord_reward_total     = float(am.get('coord_reward_total', 0.0))
+        agent.currency_reward_total  = float(am.get('currency_reward_total', 0.0))
         agents[agent_id]        = agent
 
     channel               = CommunicationChannel(append_log=True)

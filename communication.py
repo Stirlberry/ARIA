@@ -2,9 +2,9 @@
 ARIA Communication — Phase 2
 Signal channel + compound lexicon for emergent language.
 
-Individual signals crystallise into named symbols after LEXICON_STABILITY_THRESHOLD uses.
-Pairs of signals that co-occur during coordination events crystallise into compound
-symbols after COMPOUND_THRESHOLD coordination successes.
+Individual signals crystallise into named symbols after LEXICON_STABILITY_THRESHOLD
+coordination successes (not raw use count). Pairs of signals that co-occur during
+coordination events crystallise into compound symbols after COMPOUND_THRESHOLD successes.
 """
 
 import json
@@ -261,7 +261,7 @@ class CommunicationChannel:
             entry.coord_successes += 1
         self.total_signals += 1
 
-        if not entry.assigned and entry.use_count >= LEXICON_STABILITY_THRESHOLD:
+        if not entry.assigned and entry.coord_successes >= LEXICON_STABILITY_THRESHOLD:
             self._assign_symbol(entry)
 
         self._write({
@@ -298,11 +298,12 @@ class CommunicationChannel:
             entry.symbol   = self._symbol_pool.pop(0)
             entry.assigned = True
             self._write({
-                'event':                   'symbol_assigned',
-                'timestamp':               self._ts(),
-                'signal_idx':              entry.signal_idx,
-                'symbol':                  entry.symbol,
-                'use_count_at_assignment': entry.use_count
+                'event':                          'symbol_assigned',
+                'timestamp':                      self._ts(),
+                'signal_idx':                     entry.signal_idx,
+                'symbol':                         entry.symbol,
+                'coord_successes_at_assignment':  entry.coord_successes,
+                'use_count_at_assignment':        entry.use_count
             })
 
     def get_display_symbol(self, signal_idx):

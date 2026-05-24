@@ -1,8 +1,8 @@
 """
-ARIA Agent — Phase 2
+ARIA Agent — Phase 3
 Full evolutionary DQN with brain evolution, world model, cultural inheritance,
 curiosity, sub-goals, specialisation tracking, shared PER replay, dense rewards,
-and Theory of Mind.
+Theory of Mind, and energy-based survival.
 
 Bottleneck fixes applied:
   - visit_counts: evicts states with count > _VISIT_COUNT_EVICT_THRESH when
@@ -48,19 +48,19 @@ from config import (
     TOM_LR, TOM_POS_WEIGHT, TOM_INTENT_THRESHOLD, TOM_BONUS_SCALE,
     PLATEAU_DELTA_THRESH,
     SELF_REPL_WINDOW, SELF_REPL_COOLDOWN, SELF_REPL_FITNESS_MIN,
+    ENERGY_START, ENERGY_MAX, ENERGY_NEWBORN,
+    ENERGY_DRAIN_LOW, ENERGY_DRAIN_MED, ENERGY_DRAIN_HIGH,
 )
 
 # ── Input encoding ─────────────────────────────────────────────────────────────
 
-_INPUT_SIZE = (GRID_SIZE + GRID_SIZE          # x, y
-               + 9 + 9 + 9                    # currency_dir, coord_dir, partner_dir
-               + 3 + 3 + 3                    # currency_dist, coord_dist, partner_dist
-               + (N_SIGNALS + 1) * MAX_MSG_LEN  # received message (4 token slots)
-               + 9 + 3)                        # trail_dir, trail_dist (stigmergy)
+_N_ENERGY_BINS = 5   # critical / low / medium / high / full (bin 4 = above reproduction threshold)
 
-# State indices for trail features (elements 12 and 13 of the 14-element tuple)
-_TRAIL_DIR_IDX  = 8 + MAX_MSG_LEN      # = 12
-_TRAIL_DIST_IDX = 8 + MAX_MSG_LEN + 1  # = 13
+_INPUT_SIZE = (GRID_SIZE + GRID_SIZE              # x, y
+               + 9 + 9 + 9                        # currency_dir, coord_dir, partner_dir
+               + 3 + 3 + 3                        # currency_dist, coord_dist, partner_dist
+               + (N_SIGNALS + 1) * MAX_MSG_LEN    # received message (4 token slots)
+               + _N_ENERGY_BINS)                  # own energy level
 
 # Observable partner features for Theory of Mind
 _PARTNER_FEATURE_SIZE = 9 + 3 + (N_SIGNALS + 1) * MAX_MSG_LEN  # dir + dist + msg = 80
@@ -86,6 +86,7 @@ _HP_BOUNDS = {
     'hidden_size':    (64,    512),
     'n_layers':       (1.0,   4.0),
     'use_skip':       (0.0,   1.0),
+    'drain_rate':     (ENERGY_DRAIN_LOW, ENERGY_DRAIN_HIGH),  # evolvable energy cost per step
 }
 
 # ── Activation registry ────────────────────────────────────────────────────────
@@ -293,26 +294,28 @@ def make_replay_buffer():
 
 # ── State encoding ─────────────────────────────────────────────────────────────
 
-def _encode(state):
+def _energy_bin(energy):
+    """Map energy to one of 5 bins. Bin 4 = at or above reproduction threshold."""
+    return min(int(energy * _N_ENERGY_BINS / ENERGY_MAX), _N_ENERGY_BINS - 1)
+
+
+def _encode(state, energy=ENERGY_START):
     x, y, cd, kd, pd       = state[0], state[1], state[2], state[3], state[4]
     c_dist, k_dist, p_dist = state[5], state[6], state[7]
-    msg        = state[8:8 + MAX_MSG_LEN]   # exactly MAX_MSG_LEN token slots
-    trail_dir  = state[_TRAIL_DIR_IDX]
-    trail_dist = state[_TRAIL_DIST_IDX]
+    msg = state[8:8 + MAX_MSG_LEN]
     vec = np.zeros(_INPUT_SIZE, dtype=np.float32)
     off = 0
-    vec[off + x]          = 1.0; off += GRID_SIZE
-    vec[off + y]          = 1.0; off += GRID_SIZE
-    vec[off + cd]         = 1.0; off += 9
-    vec[off + kd]         = 1.0; off += 9
-    vec[off + pd]         = 1.0; off += 9
-    vec[off + c_dist]     = 1.0; off += 3
-    vec[off + k_dist]     = 1.0; off += 3
-    vec[off + p_dist]     = 1.0; off += 3
+    vec[off + x]      = 1.0; off += GRID_SIZE
+    vec[off + y]      = 1.0; off += GRID_SIZE
+    vec[off + cd]     = 1.0; off += 9
+    vec[off + kd]     = 1.0; off += 9
+    vec[off + pd]     = 1.0; off += 9
+    vec[off + c_dist] = 1.0; off += 3
+    vec[off + k_dist] = 1.0; off += 3
+    vec[off + p_dist] = 1.0; off += 3
     for tok in msg:
-        vec[off + tok]    = 1.0; off += N_SIGNALS + 1
-    vec[off + trail_dir]  = 1.0; off += 9
-    vec[off + trail_dist] = 1.0; off += 3
+        vec[off + tok] = 1.0; off += N_SIGNALS + 1
+    vec[off + _energy_bin(energy)] = 1.0; off += _N_ENERGY_BINS
     return vec
 
 
@@ -382,8 +385,6 @@ _TRACKABLE_CONDITIONS = [
     ('face_coord',     lambda s: s[3] != 8),
     ('face_partner',   lambda s: s[4] != 8),
     ('face_currency',  lambda s: s[2] != 8),
-    ('trail_close',    lambda s: s[13] == 0 and s[12] != 8),
-    ('trail_present',  lambda s: s[12] != 8),
 ]
 
 
@@ -549,6 +550,8 @@ class ARIAAgent:
                  intrinsic_beta=None, episodic_beta=None,
                  hidden_size=None, n_layers=None,
                  activation=None, use_skip=None,
+                 drain_rate=None,
+                 energy=None,
                  online_state_dict=None,
                  cultural_memory=None,
                  sub_goal=None,
@@ -567,6 +570,10 @@ class ARIAAgent:
         self.n_layers       = max(1, min(4, int(round(float(n_layers))))) if n_layers is not None else N_LAYERS_DEFAULT
         self.activation     = activation if activation in _ACTS else 'relu'
         self.use_skip       = bool(round(float(use_skip))) if use_skip is not None else False
+        self.drain_rate     = float(np.clip(float(drain_rate), ENERGY_DRAIN_LOW, ENERGY_DRAIN_HIGH)) if drain_rate is not None else random.choice([ENERGY_DRAIN_LOW, ENERGY_DRAIN_MED, ENERGY_DRAIN_HIGH])
+
+        # Energy — persists across episodes (not reset between episodes)
+        self.energy = float(energy) if energy is not None else ENERGY_START
 
         # Q-networks
         self.online_net = _QNet(self.hidden_size, self.n_actions,
@@ -635,13 +642,13 @@ class ARIAAgent:
         if random.random() < self.epsilon:
             return random.randint(0, self.n_actions - 1)
         with torch.no_grad():
-            sv = torch.tensor(_encode(state)).unsqueeze(0)
+            sv = torch.tensor(_encode(state, self.energy)).unsqueeze(0)
             return int(self.online_net(sv).argmax().item())
 
     def _encode_partner_features(self, state):
         """Extract observable partner features for the ToM model."""
         pd, p_dist = state[4], state[7]
-        msg        = state[8:8 + MAX_MSG_LEN]   # exactly MAX_MSG_LEN slots; trail features excluded
+        msg = state[8:8 + MAX_MSG_LEN]
         vec        = np.zeros(_PARTNER_FEATURE_SIZE, dtype=np.float32)
         off        = 0
         vec[off + pd]     = 1.0; off += 9
@@ -654,7 +661,8 @@ class ARIAAgent:
         frac = min(1.0, self._steps / max(1, PER_BETA_STEPS))
         return PER_BETA_START + frac * (1.0 - PER_BETA_START)
 
-    def update(self, state, action, reward, next_state, coord_achieved=None):
+    def update(self, state, action, reward, next_state, coord_achieved=None,
+               pre_energy=None):
         # ── Curiosity ──────────────────────────────────────────────────────────
         vc = self.visit_counts.get(state, 0) + 1
         self.visit_counts[state] = vc
@@ -698,8 +706,8 @@ class ARIAAgent:
 
         augmented = reward + shaping + global_cur + ep_cur + sg_bonus + tom_bonus + rep_bonus
 
-        sv  = _encode(state)
-        nsv = _encode(next_state)
+        sv  = _encode(state,      pre_energy if pre_energy is not None else self.energy)
+        nsv = _encode(next_state, self.energy)
         self.replay.push(sv, action, augmented, nsv)
         self._steps += 1
 
@@ -916,7 +924,7 @@ class ARIAAgent:
               for name, (lo, hi) in _HP_BOUNDS.items()}
         hp['activation'] = agent_a.activation if np.random.random() < w_a else agent_b.activation
 
-        child = cls(child_id, replay=shared_replay, **hp)
+        child = cls(child_id, replay=shared_replay, energy=ENERGY_NEWBORN, **hp)
         child.epsilon = min(agent_a.epsilon, agent_b.epsilon)
 
         archs_match = (agent_a.hidden_size == agent_b.hidden_size == child.hidden_size and

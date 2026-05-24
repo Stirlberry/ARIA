@@ -1,8 +1,8 @@
 """
 ARIA — Adaptive Reasoning and Interaction Agent
 
-Phase 2: Population dynamics, brain evolution, world models, emergent language,
-         cultural inheritance, environmental co-evolution, creative agency.
+Phase 3: Energy-based survival, death, ghost nodes, emergent communication,
+         population dynamics, brain evolution, world models, cultural inheritance.
 
 Run:
     python main.py
@@ -27,13 +27,17 @@ if os.path.exists(_env_path):
                 if _k.strip() and _v.strip() not in ('', 'your_key_here'):
                     os.environ.setdefault(_k.strip(), _v.strip())
 
+import random
+import torch
 import config
 import save_system
 from budget import cost_tracker
 from environment import Environment
 from agent import ARIAAgent, make_replay_buffer
 from communication import CommunicationChannel
-from genetics import replicate, kill_weakest, reproduce_pair, PlateauMonitor
+from genetics import (kill_weakest, pop2_reproduce, energy_reproduce,
+                      PlateauMonitor, get_alpha,
+                      log_energy_death, log_extinction)
 from help_system import HelpMonitor, LexiconAdvisor
 from visualiser import Visualiser
 from config import (
@@ -41,9 +45,36 @@ from config import (
     LEXICON_LOG_PATH,
     MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
     AUTOSAVE_EVERY, ENV_DRIFT_INTERVAL,
-    MAX_POPULATION, REPRODUCTION_STEPS,
+    MAX_POPULATION, POP2_CURRENCY_THRESHOLD,
     CONTACT_WINDOW, CONTACT_COORD_BONUS,
+    HANDSHAKE_WINDOW, HANDSHAKE_REWARD,
+    ENERGY_MAX, REWARD_DEATH, REWARD_REPRODUCE,
+    REPRODUCTION_THRESHOLD, REPRODUCTION_COST,
+    REWARD_CHATTER_COORD, REWARD_SHOUT_COORD, REWARD_SIGNAL_ACTED,
+    CHATTER_RANGE, SHOUT_RANGE, N_SIGNALS, SPAWN_PAUSE_STEPS,
 )
+
+
+def _absorb_ghost_weights(agent, ghost_state_dict):
+    """Absorb a dead agent's network weights into a living agent via 50/50 crossover."""
+    try:
+        live_params  = list(agent.online_net.parameters())
+        ghost_values = list(ghost_state_dict.values())
+        with torch.no_grad():
+            for i, param in enumerate(live_params):
+                if i < len(ghost_values) and ghost_values[i].shape == param.shape:
+                    mask = torch.rand_like(param) < 0.5
+                    param.copy_(torch.where(mask, ghost_values[i], param))
+        agent.target_net.load_state_dict(agent.online_net.state_dict())
+    except Exception:
+        pass  # architecture mismatch — skip silently
+
+
+_SEPARATION_DIRS = [(0, 1), (2, 3), (4, 7), (5, 6)]   # (dir_a, dir_b) opposite movement pairs
+
+def _choose_separation():
+    """Return (dir_a, dir_b) as opposite movement action indices."""
+    return random.choice(_SEPARATION_DIRS)
 
 
 def main():
@@ -121,8 +152,8 @@ def main():
                 env.drift_nodes()
                 print(f'  [Drift] Nodes relocated at episode {episode}')
 
-            # ── Death phase: fires when at MAX_POPULATION and plateau triggers ──
-            if len(agents) == MAX_POPULATION:
+            # ── Death phase: plateau triggers kill-weakest (needs ≥ 2 to compare) ──
+            if len(agents) > 1:
                 should_kill, kill_reason = plateau_mon.should_replicate(
                     agents, episode, last_replication_ep
                 )
@@ -140,7 +171,7 @@ def main():
                     last_replication_ep = episode
                     plateau_mon.deregister(death_summary['retired_id'])
                     help_mon.register_agent(death_summary['retired_id'])  # flush any pending
-                    env.reset(agent_ids=list(agents.keys()))
+                    env.reset(agent_ids=list(agents.keys()), soft=True)
                     print(f'  Died    : {death_summary["retired_id"]} '
                           f'(reward {death_summary["retired_total_reward"]:.1f})')
                     print(f'  Survivors: {", ".join(agents)}\n')
@@ -154,20 +185,22 @@ def main():
                     help_mon.run_help_cycle(agent_id, agent, reason, episode, config)
 
             # Episode setup
-            states           = env.reset(agent_ids=list(agents.keys()))
-            ep_rewards       = {a: 0.0 for a in agents}
-            ep_coord_any     = False
-            last_signal_step = {a: -(config.SIGNAL_WINDOW + 1) for a in agents}
-            contact_log      = {a: -(CONTACT_WINDOW + 1) for a in agents}
+            states             = env.reset(agent_ids=list(agents.keys()), soft=True)
+            ep_rewards         = {a: 0.0 for a in agents}
+            ep_coord_any       = False
+            extinct            = False
+            last_signal_step   = {a: -(config.SIGNAL_WINDOW + 1) for a in agents}
+            last_signal_pos    = {}
+            last_received_step = {a: -(config.SIGNAL_WINDOW + 1) for a in agents}
+            contact_log        = {a: -(CONTACT_WINDOW + 1) for a in agents}
+            spawn_event        = None
 
-            # Proximity tracking for biological reproduction (only when below MAX_POPULATION)
-            pair_proximity   = {}   # (id_a, id_b) -> consecutive steps on same cell
-            repro_pair       = None  # set to (agent_a, agent_b) when threshold reached
 
             for step in range(MAX_STEPS_PER_EPISODE):
 
-                actions      = {}
-                signals_sent = {a: None for a in agents}
+                pre_positions = env.get_positions()
+                actions       = {}
+                signals_sent  = {a: None for a in agents}
 
                 for agent_id, agent in agents.items():
                     action = agent.select_action(states[agent_id])
@@ -177,16 +210,149 @@ def main():
                 for agent_id, sig in signals_sent.items():
                     if sig is not None:
                         last_signal_step[agent_id] = step
+                        last_signal_pos[agent_id]  = pre_positions.get(agent_id)
+
+                # ── Birth sequence: pause parents, reveal child on countdown ──
+                if spawn_event is not None:
+                    pa_id = spawn_event['parent_a_id']
+                    pb_id = spawn_event['parent_b_id']
+                    if pa_id not in agents or pb_id not in agents:
+                        spawn_event = None   # cancel — a parent died during pause
+                    else:
+                        spawn_event['pause_remaining'] -= 1
+                        if spawn_event['pause_remaining'] > 0:
+                            actions[pa_id] = 8
+                            actions[pb_id] = 8
+                        else:
+                            # Pause over — separate parents and birth child
+                            actions[pa_id] = spawn_event['dir_a']
+                            actions[pb_id] = spawn_event['dir_b']
+                            parent_a = agents[pa_id]
+                            parent_b = agents[pb_id]
+                            agents, new_channel, summary = energy_reproduce(
+                                parent_a, parent_b, agents, channel, episode,
+                                set(all_ids_ever), shared_replay=shared_replay
+                            )
+                            channel             = new_channel
+                            child_id            = summary['child_id']
+                            all_ids_ever.append(child_id)
+                            generation         += 1
+                            last_replication_ep = episode
+                            help_mon.register_agent(child_id)
+                            plateau_mon.register(child_id)
+                            env.add_newborn(child_id, spawn_event['spawn_point'])
+                            last_signal_step[child_id]   = -(config.SIGNAL_WINDOW + 1)
+                            last_received_step[child_id] = -(config.SIGNAL_WINDOW + 1)
+                            contact_log[child_id]        = -(CONTACT_WINDOW + 1)
+                            ep_rewards[child_id]         = 0.0
+                            actions[child_id]            = 8
+                            signals_sent[child_id]       = None
+                            vis.notify_replication(summary)
+                            hp  = summary['child_hyperparams']
+                            c_e = agents[child_id].energy
+                            print(f'\n  [Gen {generation}] Born {child_id} '
+                                  f'(energy={c_e:.0f}) at {spawn_event["spawn_point"]} '
+                                  f'ep {episode} step {step}')
+                            print(f'  Parents : {pa_id} + {pb_id}')
+                            print(f'  Hyperparams: lr={hp["lr"]}  '
+                                  f'layers={hp["n_layers"]}  act={hp["activation"]}  '
+                                  f'drain={hp["drain_rate"]}\n')
+                            spawn_event = None
 
                 next_states, rewards, done, info, signals_received = env.step(
                     actions, signals_sent
                 )
 
+                positions  = env.get_positions()
+
+                # ── Track received signals for REWARD_SIGNAL_ACTED ────────────
+                for agent_id in agents:
+                    a_pos = pre_positions.get(agent_id)
+                    if a_pos is None:
+                        continue
+                    for other_id, sig in signals_sent.items():
+                        if other_id == agent_id or sig is None:
+                            continue
+                        o_pos = pre_positions.get(other_id)
+                        if o_pos is None:
+                            continue
+                        if (max(abs(a_pos[0] - o_pos[0]),
+                                abs(a_pos[1] - o_pos[1])) <= SHOUT_RANGE):
+                            last_received_step[agent_id] = step
+                            break
+
+                # ── Energy: drain, gain, cap ───────────────────────────────────
+                pre_energies = {}
+                for agent_id, agent in list(agents.items()):
+                    pre_energies[agent_id] = agent.energy
+                    agent.energy -= agent.drain_rate
+                    agent.energy += info['energy_gains'].get(agent_id, 0.0)
+                    agent.energy  = min(ENERGY_MAX, max(0.0, agent.energy))
+
+                # ── Ghost node absorption ──────────────────────────────────────
+                for agent_id, ghost_data in info['ghost_collected']:
+                    if agent_id in agents:
+                        _absorb_ghost_weights(agents[agent_id], ghost_data)
+                        print(f'  [Ghost] {agent_id} absorbed knowledge at '
+                              f'ep {episode} step {step}')
+
+                # ── Death: energy depleted ────────────────────────────────────
+                newly_dead = [aid for aid, a in agents.items() if a.energy <= 0]
+
+                for agent_id in newly_dead:
+                    agent = agents[agent_id]
+                    rewards[agent_id] += REWARD_DEATH
+                    agent.update(
+                        states[agent_id], actions[agent_id],
+                        rewards[agent_id], next_states[agent_id],
+                        info['coord_achieved'],
+                        pre_energy=pre_energies[agent_id],
+                    )
+                    ep_rewards[agent_id] = ep_rewards.get(agent_id, 0.0) + rewards[agent_id]
+                    death_pos = env.get_positions().get(agent_id)
+                    if death_pos:
+                        env.add_ghost_node(death_pos, agent.online_net.state_dict())
+                    print(f'  [Death] {agent_id} energy depleted at '
+                          f'ep {episode} step {step} — ghost at {death_pos}')
+                    log_energy_death(agent, episode, step)
+                    del agents[agent_id]
+
+                if newly_dead:
+                    env.reset(agent_ids=list(agents.keys()), soft=True)
+
+                if not agents:
+                    extinct = True
+                    break
+
                 if info['coord_achieved']:
                     ep_coord_any = True
-                    for agent_id in agents:
-                        if step - last_signal_step[agent_id] <= config.SIGNAL_WINDOW:
-                            rewards[agent_id] += config.SIGNAL_REWARD
+                    coord_pos    = [positions.get(a) for a in info['coord_agents']
+                                    if positions.get(a) is not None]
+                    for agent_id in list(agents.keys()):
+                        if agent_id in newly_dead:
+                            continue
+                        if (step - last_signal_step.get(
+                                agent_id, -(config.SIGNAL_WINDOW + 1))
+                                <= config.SIGNAL_WINDOW):
+                            sig_pos = last_signal_pos.get(agent_id)
+                            if sig_pos is not None and coord_pos:
+                                d = min(
+                                    max(abs(sig_pos[0] - cp[0]),
+                                        abs(sig_pos[1] - cp[1]))
+                                    for cp in coord_pos
+                                )
+                                if d <= CHATTER_RANGE:
+                                    rewards[agent_id] += REWARD_CHATTER_COORD
+                                elif d <= SHOUT_RANGE:
+                                    rewards[agent_id] += REWARD_SHOUT_COORD
+                            else:
+                                rewards[agent_id] += config.SIGNAL_REWARD
+                    for agent_id in info['coord_agents']:
+                        if agent_id in agents and agent_id not in newly_dead:
+                            if (step - last_received_step.get(
+                                    agent_id, -(config.SIGNAL_WINDOW + 1))
+                                    <= config.SIGNAL_WINDOW):
+                                rewards[agent_id] += REWARD_SIGNAL_ACTED
                     # Contact coordination bonus: meet → talk → act together
                     recent = [a for a in info['coord_agents']
                               if step - contact_log.get(a, -(CONTACT_WINDOW + 1)) <= CONTACT_WINDOW]
@@ -218,20 +384,71 @@ def main():
                 for agent_id, msg_tokens in info.get('messages_sent', {}).items():
                     channel.record_message(agent_id, msg_tokens, info['coord_achieved'])
 
+                agent_list = list(agents.keys())
+
+                # ── Energy-based reproduction detection ───────────────────────
+                if spawn_event is None and len(agents) < MAX_POPULATION:
+                    for i in range(len(agent_list)):
+                        for j in range(i + 1, len(agent_list)):
+                            a_id, b_id = agent_list[i], agent_list[j]
+                            if a_id in newly_dead or b_id in newly_dead:
+                                continue
+                            ag_a = agents.get(a_id)
+                            ag_b = agents.get(b_id)
+                            if ag_a is None or ag_b is None:
+                                continue
+                            if (positions.get(a_id) == positions.get(b_id) and
+                                    ag_a.energy >= REPRODUCTION_THRESHOLD and
+                                    ag_b.energy >= REPRODUCTION_THRESHOLD):
+                                ag_a.energy = max(0.0, ag_a.energy - REPRODUCTION_COST)
+                                ag_b.energy = max(0.0, ag_b.energy - REPRODUCTION_COST)
+                                rewards[a_id] = rewards.get(a_id, 0.0) + REWARD_REPRODUCE
+                                rewards[b_id] = rewards.get(b_id, 0.0) + REWARD_REPRODUCE
+                                dir_a, dir_b = _choose_separation()
+                                spawn_event = {
+                                    'parent_a_id':     a_id,
+                                    'parent_b_id':     b_id,
+                                    'spawn_point':     positions.get(a_id),
+                                    'pause_remaining': SPAWN_PAUSE_STEPS,
+                                    'pause_total':     SPAWN_PAUSE_STEPS,
+                                    'dir_a':           dir_a,
+                                    'dir_b':           dir_b,
+                                }
+                                break
+                        if spawn_event is not None:
+                            break
+
+                # ── Handshake reward: reply to a recent signal from adjacent agent ──
+                for agent_id, sig in signals_sent.items():
+                    if sig is not None:
+                        pos_a = positions[agent_id]
+                        for other_id in agent_list:
+                            if other_id == agent_id:
+                                continue
+                            steps_since = step - last_signal_step.get(
+                                other_id, -(HANDSHAKE_WINDOW + 1))
+                            if (0 < steps_since <= HANDSHAKE_WINDOW
+                                    and max(abs(positions[other_id][0] - pos_a[0]),
+                                            abs(positions[other_id][1] - pos_a[1])) <= 1):
+                                rewards[agent_id] += HANDSHAKE_REWARD
+                                break
+
                 for agent_id, agent in agents.items():
+                    if agent_id in newly_dead:
+                        continue  # already updated in death handler above
+                    if agent_id not in states or agent_id not in next_states:
+                        continue  # agent joined mid-episode — skip
                     agent.update(
                         states[agent_id],
                         actions[agent_id],
                         rewards[agent_id],
                         next_states[agent_id],
                         info['coord_achieved'],
+                        pre_energy=pre_energies.get(agent_id, agent.energy),
                     )
                     ep_rewards[agent_id] += rewards[agent_id]
 
-                states = next_states
-
-                positions  = env.get_positions()
-                agent_list = list(agents.keys())
+                states = {a: next_states[a] for a in agents if a in next_states}
 
                 # ── Contact tracking: collision + signal → log for both agents ──
                 for i in range(len(agent_list)):
@@ -243,21 +460,8 @@ def main():
                             contact_log[a_id] = step
                             contact_log[b_id] = step
 
-                # ── Proximity: track any pair sharing a cell (reproduction trigger) ──
-                if repro_pair is None and len(agents) < MAX_POPULATION:
-                    for i in range(len(agent_list)):
-                        for j in range(i + 1, len(agent_list)):
-                            a_id, b_id = agent_list[i], agent_list[j]
-                            key = (a_id, b_id)
-                            if positions.get(a_id) == positions.get(b_id):
-                                pair_proximity[key] = pair_proximity.get(key, 0) + 1
-                                if pair_proximity[key] >= REPRODUCTION_STEPS:
-                                    repro_pair = (agents[a_id], agents[b_id])
-                            else:
-                                pair_proximity[key] = 0
-
                 vis.render(env, agents, channel, episode, step,
-                           ep_rewards, generation)
+                           ep_rewards, generation, spawn_event=spawn_event)
 
                 if done:
                     break
@@ -273,40 +477,24 @@ def main():
 
             vis.record_episode(ep_rewards)
 
-            # ── Reproduction: if a pair stayed together for REPRODUCTION_STEPS ──
-            if repro_pair is not None and len(agents) < MAX_POPULATION:
-                parent_a, parent_b = repro_pair
-                print(f'\n  [Gen {generation}] Reproduction at episode {episode} '
-                      f'— {parent_a.agent_id} + {parent_b.agent_id} met for '
-                      f'{REPRODUCTION_STEPS} steps')
-                agents, new_channel, summary = reproduce_pair(
-                    parent_a, parent_b, agents, channel, episode,
-                    set(all_ids_ever), shared_replay=shared_replay
-                )
-                all_ids_ever.append(summary['child_id'])
-                generation          += 1
-                last_replication_ep  = episode
-                channel              = new_channel
-
-                help_mon.register_agent(summary['child_id'])
-                plateau_mon.register(summary['child_id'])
-
-                env.reset(agent_ids=list(agents.keys()))
-                vis.notify_replication(summary)
-
-                hp = summary['child_hyperparams']
-                print(f'  Born    : {summary["child_id"]}')
-                print(f'  Parents : {parent_a.agent_id} + {parent_b.agent_id}')
-                print(f'  Weights : {summary["weights"]}')
-                print(f'  Hyperparams : lr={hp["lr"]}  '
-                      f'layers={hp["n_layers"]}  act={hp["activation"]}  '
-                      f'skip={hp["use_skip"]}\n')
+            # ── Extinction handler ─────────────────────────────────────────────
+            if extinct:
+                print('\n' + '=' * 64)
+                print(f'  [EXTINCTION] All agents died — episode {episode}')
+                print(f'  Generation reached  : {generation}')
+                print(f'  Full lineage        : {" > ".join(all_ids_ever)}')
+                print(f'  Total signals       : {channel.total_signals}')
+                print(f'  Lexicon assigned    : {channel.assigned_count()}/4')
+                print('=' * 64)
+                log_extinction(episode, generation, all_ids_ever, channel)
+                channel.flush_log()
+                return
 
             # Proactive lexicon analysis every 100 episodes
             lexicon_advisor.maybe_advise(channel, agents, episode, config)
 
             # Console summary every 25 episodes
-            if episode % 25 == 0:
+            if episode % 25 == 0 and agents:
                 eps      = list(agents.values())[0].epsilon
                 assigned = channel.assigned_count()
                 compound = channel.compound_lexicon.crystallised_count()
@@ -316,8 +504,11 @@ def main():
                                       for a in ids)
                 roles    = '/'.join(agents[a].role[0] for a in ids)
                 goals    = '/'.join(agents[a].goal_label[:10] for a in ids)
+                alpha_label = get_alpha(agents).split('-')[1]
+                e_str = ' '.join(f'{a.split("-")[1]}:{agents[a].energy:.0f}' for a in ids)
                 print(f'  Ep {episode:5d} | gen {generation} | '
-                      f'eps {eps:.4f} | {r_str} | '
+                      f'pop {len(agents)}/{MAX_POPULATION} α:{alpha_label} | '
+                      f'eps {eps:.4f} | {r_str} | nrg [{e_str}] | '
                       f'lex {assigned}/4 cmp {compound} seq {seqs} | '
                       f'roles [{roles}] | goals [{goals}] | '
                       f'api ${cost_tracker.session_cost:.4f}')

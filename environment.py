@@ -1,26 +1,27 @@
 """
-ARIA Environment — Phase 2
-Grid world with currency nodes, coordination nodes, stigmergy, and finite resources.
+ARIA Environment — Phase 3
+Grid world with currency nodes, CO nodes, ghost nodes, fog of war, and finite resources.
 
-State per agent (14 elements):
+State per agent (12 elements):
   (x, y,
    currency_dir, coord_dir, partner_dir,
    currency_dist, coord_dist, partner_dist,
-   msg[0], msg[1], msg[2], msg[3],
-   trail_dir, trail_dist)
+   msg[0], msg[1], msg[2], msg[3])
 
-Stigmergy:
-  A 16×16 marker grid persists across episodes. Agents leave pheromone-like
-  markers when they collect currency (strength 0.7) or achieve coordination
-  (strength 1.0). Markers decay by MARKER_DECAY each step. The state encodes
-  direction and distance to the nearest significant marker — agents can follow
-  trails left by previous agents without any direct communication.
+Communication:
+  Chatter (CHATTER_RANGE=1): messages from adjacent agents take priority.
+  Shout  (SHOUT_RANGE=3):    if no adjacent message, the nearest agent within
+                              shout range is heard instead.
 
-Finite resources:
-  Currency nodes have limited stock (CURRENCY_NODE_CAPACITY collections each).
-  On depletion, the node disappears from the active set and a regen timer starts.
-  After CURRENCY_REGEN_STEPS the node returns at full stock. This creates genuine
-  ecological pressure: agents clustering on one node deplete it and must disperse.
+Energy:
+  Currency nodes yield ENERGY_FROM_CURRENCY per collection (returned in info).
+  CO nodes yield ENERGY_FROM_CO per participating agent (returned in info).
+  Ghost nodes (dead agent knowledge) yield one absorption event then disappear.
+
+CO hold:
+  An agent waiting alone on a CO node accumulates hold steps. When it exceeds
+  CO_HOLD_MAX_STEPS the environment reports a timeout in info so the caller
+  can apply a nudge; the node itself is unaffected.
 """
 
 import random
@@ -29,8 +30,9 @@ from config import (
     GRID_SIZE, N_CURRENCY_NODES, N_COORD_NODES,
     REWARD_CURRENCY, REWARD_COORD, REWARD_STEP, N_SIGNALS,
     MAX_MSG_LEN, MIN_COORD_AGENTS, ENV_DRIFT_N_NODES,
-    MARKER_DECAY, MARKER_THRESHOLD, MARKER_STRENGTH_COORD, MARKER_STRENGTH_CURR,
-    CURRENCY_NODE_CAPACITY, CURRENCY_REGEN_STEPS,
+    CURRENCY_NODE_CAPACITY, REGEN_MIN_STEPS, REGEN_MAX_STEPS, FOG_RADIUS,
+    ENERGY_FROM_CURRENCY, ENERGY_FROM_CO,
+    GHOST_NODE_ACCESSES, CHATTER_RANGE, SHOUT_RANGE, CO_HOLD_MAX_STEPS,
 )
 
 _NO_SIGNAL = N_SIGNALS   # sentinel: empty message slot
@@ -47,28 +49,57 @@ class Environment:
         self._last_msgs      = {}
         self.steps           = 0
 
-        # Finite resources
-        self._node_stock   = {}   # pos -> remaining stock (active nodes only)
-        self._depleted     = {}   # pos -> steps until regen
-
-        # Stigmergy: persists across episodes (environmental memory)
-        self._markers = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.float32)
+        self._node_stock      = {}   # pos -> remaining stock (active nodes only)
+        self._pending_spawns  = []   # list of [steps_remaining, node_type]
+        self.ghost_nodes      = {}   # pos -> {'data': any, 'accesses': int}
+        self._co_hold_steps   = {}   # agent_id -> steps spent waiting alone on a CO node
 
         self.reset()
 
-    def reset(self, agent_ids=None):
+    def reset(self, agent_ids=None, soft=False):
+        """
+        soft=False (default): full reset — randomise all positions (startup / save-restore).
+        soft=True:            keep positions; only clear step counter and message buffers.
+                              New agents (births) are placed at a random empty cell.
+                              Dead agents are removed from agent_positions.
+        """
         if agent_ids is not None:
             self.agent_ids = list(agent_ids)
-        self.currency_nodes  = set()
-        self.coord_nodes     = set()
-        self.agent_positions = {}
-        self.steps           = 0
-        self._msg_buffers    = {a: [] for a in self.agent_ids}
-        self._last_msgs      = {a: [_NO_SIGNAL] * MAX_MSG_LEN for a in self.agent_ids}
-        self._node_stock     = {}
-        self._depleted       = {}
-        # Markers are NOT reset — they persist as environmental memory
-        self._place_entities()
+
+        if not soft:
+            self.currency_nodes  = set()
+            self.coord_nodes     = set()
+            self.agent_positions = {}
+            self.steps           = 0
+            self._node_stock     = {}
+            self._pending_spawns = []
+            self.ghost_nodes     = {}
+            self._co_hold_steps  = {}
+            self._msg_buffers    = {a: [] for a in self.agent_ids}
+            self._last_msgs      = {a: [_NO_SIGNAL] * MAX_MSG_LEN for a in self.agent_ids}
+            self._place_entities()
+        else:
+            self.steps = 0
+            # Remove agents that have left the population
+            self.agent_positions = {a: p for a, p in self.agent_positions.items()
+                                    if a in self.agent_ids}
+            self._co_hold_steps  = {a: v for a, v in self._co_hold_steps.items()
+                                    if a in self.agent_ids}
+            # Place any new agents (newborns) at a random empty cell
+            occupied = (set(self.agent_positions.values()) |
+                        self.currency_nodes | self.coord_nodes)
+            for a in self.agent_ids:
+                if a not in self.agent_positions:
+                    for _ in range(200):
+                        pos = (random.randint(0, self.grid_size - 1),
+                               random.randint(0, self.grid_size - 1))
+                        if pos not in occupied:
+                            self.agent_positions[a] = pos
+                            occupied.add(pos)
+                            break
+            self._msg_buffers = {a: [] for a in self.agent_ids}
+            self._last_msgs   = {a: [_NO_SIGNAL] * MAX_MSG_LEN for a in self.agent_ids}
+
         return self._get_states()
 
     def _place_entities(self):
@@ -132,67 +163,75 @@ class Environment:
         return min(others,
                    key=lambda x: max(abs(x[1][0] - pos[0]), abs(x[1][1] - pos[1])))[0]
 
-    def _nearest_marker_dir_dist(self, pos):
-        """
-        Direction and distance bin to the nearest pheromone trail above threshold.
-        Returns (8, 0) when no significant trail exists nearby.
-        Excludes the agent's own cell so it always gets navigation guidance.
-        """
-        x, y = pos
-        ys, xs = np.where(self._markers >= MARKER_THRESHOLD)
-        if len(xs) == 0:
-            return 8, 0
+    # ── Spawning ───────────────────────────────────────────────────────────────
 
-        # Exclude own cell — find direction TO a trail, not the one under foot
-        mask  = ~((xs == x) & (ys == y))
-        xs, ys = xs[mask], ys[mask]
-        if len(xs) == 0:
-            return 8, 0
+    def _queue_spawn(self, node_type):
+        """Queue a node for random-position, random-time respawn."""
+        delay = random.randint(REGEN_MIN_STEPS, REGEN_MAX_STEPS)
+        self._pending_spawns.append([delay, node_type])
 
-        dists   = np.maximum(np.abs(xs - x), np.abs(ys - y))
-        i       = int(dists.argmin())
-        dx      = int(xs[i]) - x
-        dy      = int(ys[i]) - y
-        d       = int(dists[i])
-
-        angle   = np.arctan2(dy, dx)
-        dir_idx = int((angle + np.pi) / (2 * np.pi) * 8) % 8
-        dist_bin = 0 if d <= 3 else (1 if d <= 8 else 2)
-        return dir_idx, dist_bin
+    def _spawn_node(self, node_type):
+        """Place a node at a random cell not currently occupied by any agent."""
+        occupied = (set(self.agent_positions.values()) |
+                    self.currency_nodes | self.coord_nodes)
+        for _ in range(200):
+            pos = (random.randint(0, self.grid_size - 1),
+                   random.randint(0, self.grid_size - 1))
+            if pos not in occupied:
+                if node_type == 'currency':
+                    self.currency_nodes.add(pos)
+                    self._node_stock[pos] = CURRENCY_NODE_CAPACITY
+                else:
+                    self.coord_nodes.add(pos)
+                return
 
     # ── State ──────────────────────────────────────────────────────────────────
 
+    def _in_fog(self, pos, target):
+        """Return True if target is beyond the agent's fog-of-war radius."""
+        return max(abs(target[0] - pos[0]), abs(target[1] - pos[1])) > FOG_RADIUS
+
+    def _visible_nodes(self, pos, node_set):
+        """Filter node_set to only those within FOG_RADIUS (Chebyshev)."""
+        return {n for n in node_set if not self._in_fog(pos, n)}
+
     def _get_state(self, agent_id):
-        pos          = self.agent_positions[agent_id]
-        currency_dir = self._nearest_direction(pos, self.currency_nodes)
-        coord_dir    = self._nearest_direction(pos, self.coord_nodes)
+        pos = self.agent_positions[agent_id]
 
-        nearest      = self._nearest_agent_id(agent_id)
-        partner_dir  = (self._nearest_direction(pos, {self.agent_positions[nearest]})
-                        if nearest else 8)
-        currency_dist = self._nearest_dist_bin(pos, self.currency_nodes)
-        coord_dist    = self._nearest_dist_bin(pos, self.coord_nodes)
-        partner_dist  = (self._nearest_dist_bin(pos, {self.agent_positions[nearest]})
-                         if nearest else 0)
+        visible_currency = self._visible_nodes(pos, self.currency_nodes)
+        visible_coord    = self._visible_nodes(pos, self.coord_nodes)
 
-        # Messages received from agents within 1 cell — nearest heard first.
-        # Contact bonus still requires same-cell collision (tracked in main.py).
-        nearby = sorted(
-            [a for a in self.agent_ids if a != agent_id
-             and max(abs(self.agent_positions[a][0] - pos[0]),
-                     abs(self.agent_positions[a][1] - pos[1])) <= 1],
-            key=lambda a: max(abs(self.agent_positions[a][0] - pos[0]),
-                              abs(self.agent_positions[a][1] - pos[1]))
-        )
-        if nearby and nearby[0] in self._last_msgs:
-            received = tuple(self._last_msgs[nearby[0]])
+        currency_dir  = self._nearest_direction(pos, visible_currency)
+        coord_dir     = self._nearest_direction(pos, visible_coord)
+        currency_dist = self._nearest_dist_bin(pos, visible_currency)
+        coord_dist    = self._nearest_dist_bin(pos, visible_coord)
+
+        nearest     = self._nearest_agent_id(agent_id)
+        partner_pos = self.agent_positions[nearest] if nearest else None
+        if partner_pos and not self._in_fog(pos, partner_pos):
+            partner_dir  = self._nearest_direction(pos, {partner_pos})
+            partner_dist = self._nearest_dist_bin(pos, {partner_pos})
         else:
-            received = (_NO_SIGNAL,) * MAX_MSG_LEN
+            partner_dir  = 8
+            partner_dist = 0
 
-        trail_dir, trail_dist = self._nearest_marker_dir_dist(pos)
+        def _chebyshev(a):
+            return max(abs(self.agent_positions[a][0] - pos[0]),
+                       abs(self.agent_positions[a][1] - pos[1]))
+
+        others_in_range = sorted(
+            [a for a in self.agent_ids if a != agent_id
+             and _chebyshev(a) <= SHOUT_RANGE],
+            key=_chebyshev
+        )
+        # Chatter (adjacent) takes priority over shout
+        chatters = [a for a in others_in_range if _chebyshev(a) <= CHATTER_RANGE]
+        source   = chatters[0] if chatters else (others_in_range[0] if others_in_range else None)
+        received = tuple(self._last_msgs[source]) if source and source in self._last_msgs \
+                   else (_NO_SIGNAL,) * MAX_MSG_LEN
 
         return (pos[0], pos[1], currency_dir, coord_dir, partner_dir,
-                currency_dist, coord_dist, partner_dist) + received + (trail_dir, trail_dist)
+                currency_dist, coord_dist, partner_dist) + received
 
     def _get_states(self):
         return {a: self._get_state(a) for a in self.agent_ids}
@@ -201,23 +240,17 @@ class Environment:
 
     def step(self, actions, signals_sent):
         """
-        actions:      dict agent_id -> int (0-3 move, 4+ signal)
+        actions:      dict agent_id -> int (0-7 move, 8+ signal)
         signals_sent: dict agent_id -> int signal index or None
         Returns: next_states, rewards, done, info, signals_sent
-
-        Variable-length messages: consecutive signal actions accumulate in a
-        buffer. The first move action flushes the buffer as a complete message.
-
-        Finite resources: currency nodes deplete after CURRENCY_NODE_CAPACITY
-        collections and regenerate after CURRENCY_REGEN_STEPS steps.
-
-        Stigmergy: markers are placed on currency collection and coordination
-        success. All markers decay by MARKER_DECAY each step.
         """
         self.steps += 1
         rewards = {a: REWARD_STEP for a in self.agent_ids}
         info    = {'coord_achieved': False, 'currency_collected': [],
-                   'messages_sent': {}, 'coord_agents': []}
+                   'messages_sent': {}, 'coord_agents': [],
+                   'energy_gains': {},        # agent_id -> energy gained this step
+                   'ghost_collected': [],     # list of (agent_id, ghost_data)
+                   'co_hold_timeout': []}
 
         deltas = [(0, -1), (0, 1), (1, 0), (-1, 0),    # N S E W
                   (1, -1), (-1, -1), (1, 1), (-1, 1)]  # NE NW SE SW
@@ -249,14 +282,15 @@ class Environment:
                 new_positions[agent_id] = pos
         self.agent_positions = new_positions
 
-        # ── Finite resource: regen depleted nodes ──────────────────────────────
-        regen_ready = [p for p, t in self._depleted.items() if t <= 1]
-        for pos in regen_ready:
-            del self._depleted[pos]
-            self.currency_nodes.add(pos)
-            self._node_stock[pos] = CURRENCY_NODE_CAPACITY
-        for pos in self._depleted:
-            self._depleted[pos] -= 1
+        # ── Pending spawns: tick down and spawn ready nodes ────────────────────
+        still_pending = []
+        for entry in self._pending_spawns:
+            entry[0] -= 1
+            if entry[0] <= 0:
+                self._spawn_node(entry[1])
+            else:
+                still_pending.append(entry)
+        self._pending_spawns = still_pending
 
         # ── Currency collection (finite stock) ─────────────────────────────────
         for agent_id in self.agent_ids:
@@ -267,50 +301,67 @@ class Environment:
                     self._node_stock[pos] = stock - 1
                     rewards[agent_id] += REWARD_CURRENCY
                     info['currency_collected'].append(agent_id)
-                    # Stigmergy: mark currency location
-                    self._place_marker(pos, MARKER_STRENGTH_CURR)
+                    info['energy_gains'][agent_id] = (
+                        info['energy_gains'].get(agent_id, 0) + ENERGY_FROM_CURRENCY)
                     if self._node_stock[pos] == 0:
-                        # Node depleted — remove from active set, start regen
                         self.currency_nodes.discard(pos)
                         del self._node_stock[pos]
-                        self._depleted[pos] = CURRENCY_REGEN_STEPS
+                        self._queue_spawn('currency')
 
-        # ── Coordination ───────────────────────────────────────────────────────
+        # ── CO node collection (requires MIN_COORD_AGENTS) ─────────────────────
         for coord_pos in list(self.coord_nodes):
             near = [a for a in self.agent_ids
-                    if max(abs(self.agent_positions[a][0] - coord_pos[0]),
-                           abs(self.agent_positions[a][1] - coord_pos[1])) <= 1]
+                    if self.agent_positions[a] == coord_pos]
             if len(near) >= MIN_COORD_AGENTS:
                 self.coord_nodes.discard(coord_pos)
                 for a in near:
                     rewards[a] += REWARD_COORD
+                    info['energy_gains'][a] = (
+                        info['energy_gains'].get(a, 0) + ENERGY_FROM_CO)
                 info['coord_achieved'] = True
                 info['coord_agents'].extend(near)
-                # Stigmergy: strong marker at coordination point and agent positions
-                self._place_marker(coord_pos, MARKER_STRENGTH_COORD)
-                for a in near:
-                    self._place_marker(self.agent_positions[a], MARKER_STRENGTH_COORD * 0.8)
+                self._queue_spawn('coord')
+            elif len(near) == 1:
+                # One agent waiting alone — track hold steps
+                a = near[0]
+                self._co_hold_steps[a] = self._co_hold_steps.get(a, 0) + 1
+                if self._co_hold_steps[a] >= CO_HOLD_MAX_STEPS:
+                    info['co_hold_timeout'].append(a)
+                    self._co_hold_steps[a] = 0   # reset so timeout fires once per window
+            else:
+                # No agent on this CO node — clear any stale hold counters for it
+                pass
 
-        # ── Marker decay ───────────────────────────────────────────────────────
-        self._markers *= MARKER_DECAY
+        # Reset hold counter for agents that left a CO node
+        on_co = {a for coord_pos in self.coord_nodes
+                 for a in self.agent_ids if self.agent_positions[a] == coord_pos}
+        for a in list(self._co_hold_steps):
+            if a not in on_co:
+                self._co_hold_steps.pop(a, None)
+
+        # ── Ghost node collection (one access, then gone) ──────────────────────
+        for agent_id in self.agent_ids:
+            pos = self.agent_positions[agent_id]
+            if pos in self.ghost_nodes:
+                ghost = self.ghost_nodes[pos]
+                info['ghost_collected'].append((agent_id, ghost['data']))
+                ghost['accesses'] -= 1
+                if ghost['accesses'] <= 0:
+                    del self.ghost_nodes[pos]
 
         next_states = self._get_states()
-        done        = not self.currency_nodes and not self.coord_nodes
+        done        = (not self.currency_nodes and not self.coord_nodes
+                       and not self._pending_spawns)
 
         return next_states, rewards, done, info, signals_sent
-
-    def _place_marker(self, pos, strength):
-        """Place or reinforce a marker at pos, taking the max of existing and new strength."""
-        x, y = pos
-        if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
-            self._markers[y, x] = max(self._markers[y, x], strength)
 
     # ── Node drift ─────────────────────────────────────────────────────────────
 
     def drift_nodes(self, n=None):
         """
-        Relocate n active nodes to new random positions (environmental co-evolution).
-        Only active (non-depleted) currency nodes are candidates.
+        Immediately relocate n active nodes to new random positions.
+        This is an explicit environmental shift event, not a regen — nodes move
+        at once rather than queuing through _pending_spawns.
         """
         if n is None:
             n = ENV_DRIFT_N_NODES
@@ -324,7 +375,6 @@ class Environment:
             was_coord = old_pos in self.coord_nodes
             self.currency_nodes.discard(old_pos)
             self.coord_nodes.discard(old_pos)
-            # Clean up stock for moved currency node
             self._node_stock.pop(old_pos, None)
 
             for _ in range(200):
@@ -341,6 +391,22 @@ class Environment:
                     occupied.add(new_pos)
                     break
 
+    # ── Ghost nodes ────────────────────────────────────────────────────────────
+
+    def add_ghost_node(self, pos, data):
+        """Place a ghost node at pos carrying opaque data (dead agent's network weights)."""
+        if pos not in self.ghost_nodes:
+            self.ghost_nodes[pos] = {'data': data, 'accesses': GHOST_NODE_ACCESSES}
+
+    def add_newborn(self, agent_id, position):
+        """Register a newborn agent in the environment at a specific position."""
+        if agent_id not in self.agent_ids:
+            self.agent_ids.append(agent_id)
+        self.agent_positions[agent_id] = position
+        self._msg_buffers[agent_id]    = []
+        self._last_msgs[agent_id]      = [_NO_SIGNAL] * MAX_MSG_LEN
+        self._co_hold_steps.setdefault(agent_id, 0)
+
     # ── Accessors ──────────────────────────────────────────────────────────────
 
     def get_positions(self):
@@ -349,6 +415,5 @@ class Environment:
     def get_nodes(self):
         return set(self.currency_nodes), set(self.coord_nodes)
 
-    def get_marker_grid(self):
-        """Return a copy of the current marker grid (for visualisation)."""
-        return self._markers.copy()
+    def get_ghost_nodes(self):
+        return dict(self.ghost_nodes)

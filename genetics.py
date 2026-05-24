@@ -18,7 +18,8 @@ from config import (
     LEXICON_LOG_PATH, RETIRED_LOG_PATH,
     PLATEAU_WINDOW, PLATEAU_DELTA_THRESH,
     MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
-    MAX_POPULATION, SELF_REPL_FITNESS_MIN,
+    MIN_POPULATION, MAX_POPULATION, SELF_REPL_FITNESS_MIN,
+    POP2_CURRENCY_THRESHOLD,
 )
 
 
@@ -91,8 +92,15 @@ class PlateauMonitor:
         return False, ''
 
 
+def get_alpha(agents):
+    """Return the agent_id with the highest lifetime average reward per episode."""
+    def fitness(a):
+        return a.total_reward / a.episodes if a.episodes > 0 else 0.0
+    return max(agents.values(), key=fitness).agent_id
+
+
 def next_agent_id(parent_a_id, parent_b_id, all_ids_ever):
-    """Generate child ID as hex OR of parent values, with collision fallback."""
+    """Generate child ID as hex OR of parent values, with full-range collision fallback."""
     a_val = int(parent_a_id.split('-')[1], 16)
     b_val = int(parent_b_id.split('-')[1], 16)
 
@@ -100,12 +108,10 @@ def next_agent_id(parent_a_id, parent_b_id, all_ids_ever):
     if candidate not in all_ids_ever:
         return candidate
 
-    n = max(a_val, b_val) + 1
-    while n <= 0xFFFF:
+    for n in range(1, 0x10000):
         candidate = f'ARIA-{n:04X}'
         if candidate not in all_ids_ever:
             return candidate
-        n += 1
     raise RuntimeError('Exhausted all 4-digit hex agent IDs')
 
 
@@ -128,11 +134,19 @@ def kill_weakest(agents, episode, all_ids_ever):
     return new_agents, summary
 
 
-def reproduce_pair(parent_a, parent_b, agents, channel, episode,
+def pop2_reproduce(parent_a, parent_b, agents, channel, episode,
                    all_ids_ever, shared_replay=None):
+    """Legacy — kept for save-restore compatibility. Use energy_reproduce for new runs."""
+    return energy_reproduce(parent_a, parent_b, agents, channel, episode,
+                            all_ids_ever, shared_replay=shared_replay)
+
+
+def energy_reproduce(parent_a, parent_b, agents, channel, episode,
+                     all_ids_ever, shared_replay=None):
     """
-    Create a child from two agents who met on the grid for REPRODUCTION_STEPS
-    consecutive steps. Returns (new_agents, new_channel, summary).
+    Two agents above the energy threshold who physically collide produce a child.
+    Works at any population level. Energy cost already deducted by caller.
+    Cultural memory is inherited via ARIAAgent.merge().
     """
     child_id        = next_agent_id(parent_a.agent_id, parent_b.agent_id, all_ids_ever)
     child, w_a, w_b = ARIAAgent.merge(parent_a, parent_b, child_id,
@@ -142,13 +156,11 @@ def reproduce_pair(parent_a, parent_b, agents, channel, episode,
     child_channel.inherit_from(channel)
 
     summary = {
-        'retired_id':             '',
-        'surviving_id':           parent_a.agent_id,
-        'child_id':               child_id,
-        'episode':                episode,
-        'weights':                {parent_a.agent_id: w_a, parent_b.agent_id: w_b},
-        'retired_total_reward':   0,
-        'surviving_total_reward': round(parent_a.total_reward, 2),
+        'child_id':  child_id,
+        'parent_a':  parent_a.agent_id,
+        'parent_b':  parent_b.agent_id,
+        'episode':   episode,
+        'weights':   {parent_a.agent_id: w_a, parent_b.agent_id: w_b},
         'child_hyperparams': {
             'lr':         round(child.learning_rate,  6),
             'eps_d':      round(child.epsilon_decay,  4),
@@ -158,6 +170,7 @@ def reproduce_pair(parent_a, parent_b, agents, channel, episode,
             'n_layers':   int(child.n_layers),
             'activation': child.activation,
             'use_skip':   bool(child.use_skip),
+            'drain_rate': round(child.drain_rate, 3),
         }
     }
 
@@ -165,63 +178,6 @@ def reproduce_pair(parent_a, parent_b, agents, channel, episode,
 
     new_agents = dict(agents)
     new_agents[child_id] = child
-    return new_agents, child_channel, summary
-
-
-def replicate(agents, channel, episode, all_ids_ever, shared_replay=None):
-    """
-    Select top 2 agents as parents, retire the worst, create a child.
-    Maintains MAX_POPULATION agents. Returns new_agents, new_channel, summary.
-    """
-    agent_list = sorted(agents.values(), key=lambda a: a.total_reward, reverse=True)
-
-    parent_a = agent_list[0]
-    parent_b = agent_list[1]
-    retired  = agent_list[-1]
-
-    child_id         = next_agent_id(parent_a.agent_id, parent_b.agent_id, all_ids_ever)
-    child, w_a, w_b  = ARIAAgent.merge(parent_a, parent_b, child_id, shared_replay=shared_replay)
-
-    child_channel = CommunicationChannel(append_log=True)
-    child_channel.inherit_from(channel)
-
-    summary = {
-        'retired_id':             retired.agent_id,
-        'surviving_id':           parent_a.agent_id,
-        'child_id':               child_id,
-        'episode':                episode,
-        'weights':                {parent_a.agent_id: w_a, parent_b.agent_id: w_b},
-        'retired_total_reward':   round(retired.total_reward, 2),
-        'surviving_total_reward': round(parent_a.total_reward, 2),
-        'child_hyperparams': {
-            'lr':         round(child.learning_rate,  6),
-            'eps_d':      round(child.epsilon_decay,  4),
-            'β_g':        round(child.intrinsic_beta, 4),
-            'β_e':        round(child.episodic_beta,  4),
-            'h':          int(child.hidden_size),
-            'n_layers':   int(child.n_layers),
-            'activation': child.activation,
-            'use_skip':   bool(child.use_skip),
-        }
-    }
-
-    _save_retired(retired, summary)
-    _log_replication(summary)
-
-    # Survivors = all non-retired agents + new child
-    new_agents = {a.agent_id: a
-                  for a in agent_list if a.agent_id != retired.agent_id}
-    new_agents[child_id] = child
-
-    # Safety cap: if somehow over MAX_POPULATION, drop the lowest non-parent
-    while len(new_agents) > MAX_POPULATION:
-        protected = {parent_a.agent_id, parent_b.agent_id, child_id}
-        drop = min(
-            (a for a in new_agents.values() if a.agent_id not in protected),
-            key=lambda a: a.total_reward
-        )
-        del new_agents[drop.agent_id]
-
     return new_agents, child_channel, summary
 
 
@@ -266,5 +222,34 @@ def _log_death(agent, episode):
 def _log_replication(summary):
     record = {'event': 'replication', 'timestamp': datetime.now().isoformat()}
     record.update(summary)
+    with open(LEXICON_LOG_PATH, 'a') as f:
+        f.write(json.dumps(record) + '\n')
+
+
+def log_energy_death(agent, episode, step):
+    record = {
+        'event':        'energy_death',
+        'timestamp':    datetime.now().isoformat(),
+        'agent_id':     agent.agent_id,
+        'episode':      episode,
+        'step':         step,
+        'drain_rate':   round(float(agent.drain_rate), 3),
+        'total_reward': round(float(agent.total_reward), 2),
+        'episodes':     int(agent.episodes),
+    }
+    with open(LEXICON_LOG_PATH, 'a') as f:
+        f.write(json.dumps(record) + '\n')
+
+
+def log_extinction(episode, generation, all_ids_ever, channel):
+    record = {
+        'event':         'extinction',
+        'timestamp':     datetime.now().isoformat(),
+        'episode':       episode,
+        'generation':    generation,
+        'lineage':       list(all_ids_ever),
+        'total_signals': channel.total_signals,
+        'lex_assigned':  channel.assigned_count(),
+    }
     with open(LEXICON_LOG_PATH, 'a') as f:
         f.write(json.dumps(record) + '\n')

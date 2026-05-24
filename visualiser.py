@@ -7,7 +7,7 @@ import os
 import sys
 import pygame
 from collections import deque
-from config import GRID_SIZE, CELL_SIZE
+from config import GRID_SIZE, CELL_SIZE, FOG_RADIUS, MAX_POPULATION, ENERGY_MAX
 
 GRAPH_H = 150   # height of reward trend strip below the grid
 
@@ -23,6 +23,8 @@ REPL_COL     = (100, 230, 160)
 CURRENCY_COL = (70,  210, 110)
 COORD_COL    = (200, 90,  210)
 COMPOUND_COL = (255, 160, 80)
+GHOST_COL    = (120, 120, 150)
+BIRTH_COL    = (255, 240, 100)   # expanding ring shown during birth pause
 PANEL_W      = 320
 
 AGENT_COLOURS = {
@@ -67,6 +69,7 @@ class Visualiser:
         self.replication_flash   = 0
         self.last_replication    = None
         self._save_screenshot    = False
+        self._agent_scroll       = 0
 
         self.screen.fill(BG)
         cx = self.width // 2
@@ -87,6 +90,10 @@ class Visualiser:
                     self._quit()
                 if event.key == pygame.K_s:
                     self._save_screenshot = True
+            if event.type == pygame.MOUSEWHEEL:
+                mx, _ = pygame.mouse.get_pos()
+                if mx > GRID_SIZE * self.cell:   # cursor over side panel
+                    self._agent_scroll -= event.y  # wheel up → negative y → decrease index
 
     def _quit(self):
         pygame.quit()
@@ -101,7 +108,7 @@ class Visualiser:
         self.last_replication  = summary
         self.replication_flash = 90
 
-    def _draw_grid(self, env):
+    def _draw_grid(self, env, agents, spawn_event=None):
         grid_px = GRID_SIZE * self.cell
         currency_nodes, coord_nodes = env.get_nodes()
         positions = env.get_positions()
@@ -132,6 +139,14 @@ class Visualiser:
             self.screen.blit(t, (cx*self.cell+self.cell//2-8,
                                   cy*self.cell+self.cell//2-6))
 
+        for (gx, gy) in env.ghost_nodes.keys():
+            cx = gx * self.cell + self.cell // 2
+            cy = gy * self.cell + self.cell // 2
+            pygame.draw.circle(self.screen, GHOST_COL, (cx, cy),
+                               self.cell // 2 - 8, 1)
+            t = self.font_sm.render('G', True, GHOST_COL)
+            self.screen.blit(t, (cx - t.get_width() // 2, cy - 5))
+
         for agent_id, (ax, ay) in positions.items():
             col = _agent_colour(agent_id)
             tag = agent_id.split('-')[1]
@@ -141,11 +156,63 @@ class Visualiser:
             lbl = self.font_sm.render(tag, True, BG)
             self.screen.blit(lbl, (cx - len(tag)*3, cy - 6))
 
+            if agent_id in agents:
+                energy   = agents[agent_id].energy
+                bar_w    = self.cell - 10
+                bar_x    = ax * self.cell + 5
+                bar_y    = (ay + 1) * self.cell - 6
+                filled_w = max(0, int(energy / ENERGY_MAX * bar_w))
+                e_ratio  = energy / ENERGY_MAX
+                e_col    = ((60, 200, 80) if e_ratio > 0.6 else
+                            (220, 180, 40) if e_ratio > 0.3 else
+                            (220, 60, 60))
+                pygame.draw.rect(self.screen, (40, 40, 55),
+                                 pygame.Rect(bar_x, bar_y, bar_w, 3))
+                if filled_w > 0:
+                    pygame.draw.rect(self.screen, e_col,
+                                     pygame.Rect(bar_x, bar_y, filled_w, 3))
+
+        if spawn_event is not None:
+            self._draw_birth_ring(spawn_event)
+
         for i in range(GRID_SIZE + 1):
             pygame.draw.line(self.screen, GRID_LINE,
                              (i*self.cell, 0), (i*self.cell, grid_px), 1)
             pygame.draw.line(self.screen, GRID_LINE,
                              (0, i*self.cell), (grid_px, i*self.cell), 1)
+
+        # Fog of war overlay — dark everywhere except within FOG_RADIUS of each agent
+        # Magenta = colorkey (transparent hole); dark = fog
+        fog = pygame.Surface((grid_px, grid_px))
+        fog.fill((8, 8, 16))
+        fog.set_colorkey((255, 0, 255))
+        fog.set_alpha(200)
+        reveal_r = int((FOG_RADIUS + 0.5) * self.cell)
+        for (ax, ay) in positions.values():
+            cx = ax * self.cell + self.cell // 2
+            cy = ay * self.cell + self.cell // 2
+            pygame.draw.circle(fog, (255, 0, 255), (cx, cy), reveal_r)
+        self.screen.blit(fog, (0, 0))
+
+    def _draw_birth_ring(self, spawn_event):
+        """Draw three expanding, fading rings at the birth point during parent pause."""
+        sx, sy = spawn_event['spawn_point']
+        cx = sx * self.cell + self.cell // 2
+        cy = sy * self.cell + self.cell // 2
+
+        pause_rem   = spawn_event['pause_remaining']
+        pause_total = spawn_event['pause_total']
+        t = 1.0 - pause_rem / max(pause_total, 1)   # 0 → 1 over pause duration
+
+        for phase in (0.0, 0.33, 0.66):
+            tp   = (t + phase) % 1.0
+            r    = int(self.cell * 0.25 + tp * self.cell * 1.1)
+            fade = max(0.0, 1.0 - tp)
+            col  = (int(BIRTH_COL[0] * fade),
+                    int(BIRTH_COL[1] * fade),
+                    int(BIRTH_COL[2] * fade))
+            if r > 1 and (col[0] > 8 or col[1] > 8):
+                pygame.draw.circle(self.screen, col, (cx, cy), r, 2)
 
     def _draw_panel(self, agents, channel, episode, step,
                     ep_rewards, generation):
@@ -181,16 +248,46 @@ class Visualiser:
         blit(f'epsilon: {list(agents.values())[0].epsilon:.4f}', MUTED, 'sm')
         divider()
 
-        blit('ACTIVE', WHITE, 'md')
-        for agent_id, agent in agents.items():
+        def _avg_reward(a):
+            return a.total_reward / a.episodes if a.episodes > 0 else 0.0
+        alpha_id = max(agents.values(), key=_avg_reward).agent_id if agents else None
+
+        blit(f'ACTIVE  {len(agents)} agents', WHITE, 'md')
+
+        _ITEM_H    = 68   # px per agent: 1×md(20) + 3×sm(16) = 68
+        _VISIBLE   = 4    # rows shown at once
+        _LIST_H    = _ITEM_H * _VISIBLE
+        agent_items = list(agents.items())
+        n_agents    = len(agent_items)
+        n_vis       = min(n_agents, _VISIBLE)
+        self._agent_scroll = max(0, min(n_agents - n_vis, self._agent_scroll))
+        list_top    = py
+
+        self.screen.set_clip(pygame.Rect(grid_px, list_top, PANEL_W, _LIST_H))
+        for agent_id, agent in agent_items[self._agent_scroll: self._agent_scroll + n_vis]:
             col    = _agent_colour(agent_id)
             reward = ep_rewards.get(agent_id, 0.0)
             sg_txt = (f'  sg:{agent.sub_goal.template[:8]}'
                       if agent.sub_goal and agent.sub_goal.is_active else '')
-            blit(f'{agent_id}', col, 'md')
+            alpha_marker = ' [a]' if agent_id == alpha_id else ''
+            blit(f'{agent_id}{alpha_marker}', col, 'md')
             blit(f'  ep:{reward:7.1f}  tot:{agent.total_reward:9.1f}', MUTED, 'sm')
+            blit(f'  nrg:{agent.energy:5.0f}  drain:{agent.drain_rate:.1f}',
+                 MUTED, 'sm')
             blit(f'  {agent.role}  mem:{len(agent.cultural_memory)}{sg_txt}',
                  ROLE_COL.get(agent.role, MUTED), 'sm')
+        self.screen.set_clip(None)
+
+        if n_agents > _VISIBLE:
+            sb_x  = self.width - 7
+            th_h  = max(20, _LIST_H * _VISIBLE // n_agents)
+            th_y  = list_top + (_LIST_H - th_h) * self._agent_scroll // max(1, n_agents - _VISIBLE)
+            pygame.draw.rect(self.screen, PANEL_LINE,
+                             pygame.Rect(sb_x, list_top, 4, _LIST_H))
+            pygame.draw.rect(self.screen, MUTED,
+                             pygame.Rect(sb_x, th_y, 4, th_h))
+
+        py = list_top + _LIST_H
 
         divider()
 
@@ -229,7 +326,11 @@ class Visualiser:
             divider()
             blit('REPLICATION', REPL_COL, 'md')
             blit(f'  born:    {s["child_id"]}', REPL_COL, 'sm')
-            blit(f'  retired: {s["retired_id"]}', MUTED, 'sm')
+            if 'retired_id' in s:
+                blit(f'  retired: {s["retired_id"]}', MUTED, 'sm')
+            else:
+                blit(f'  parents: {s.get("parent_a","?")} + {s.get("parent_b","?")}',
+                     MUTED, 'sm')
             blit(f'  layers:{hp.get("n_layers","?")}  act:{hp.get("activation","?")}',
                  MUTED, 'sm')
 
@@ -237,7 +338,7 @@ class Visualiser:
         pygame.draw.line(self.screen, PANEL_LINE,
                          (px-4, leg_y), (self.width-8, leg_y), 1)
         self.screen.blit(
-            self.font_sm.render('$ solo   CO coord   S save   ESC quit', True, MUTED),
+            self.font_sm.render('$ solo  CO coord  scroll  S  ESC', True, MUTED),
             (px, leg_y + 8)
         )
 
@@ -249,9 +350,9 @@ class Visualiser:
             self.reward_history[agent_id].append(reward)
 
     def _draw_graph(self, agents, channel):
-        LINE_SECTION = 460   # px allocated to line chart
-        BAR_SECTION  = 180   # px allocated to reward bars
-        # lexicon takes the remainder (~320px for 16 hex signal bars)
+        LINE_SECTION = 420                              # px allocated to line chart
+        BAR_SECTION  = GRID_SIZE * CELL_SIZE - LINE_SECTION  # ends at right-panel edge (348px → ~36px per bar at 8 slots)
+        # lexicon takes the remainder (right panel width for 16 hex signal bars)
 
         gy = self.height + 22   # top of plot area
         gh = GRAPH_H - 42       # plot height
@@ -306,11 +407,29 @@ class Visualiser:
                 self.screen.blit(lbl, (gx - lbl.get_width() - 3, sy - 5))
 
             for agent_id, history in histories.items():
-                col    = _agent_colour(agent_id)
-                n      = len(history)
-                points = [to_px(i, n, v) for i, v in enumerate(history)]
+                col     = _agent_colour(agent_id)
+                n       = len(history)
+                points  = [to_px(i, n, v) for i, v in enumerate(history)]
+
+                # Faint raw trace — blend agent colour toward background
+                faint = (
+                    int(col[0] * 0.25 + PANEL_BG[0] * 0.75),
+                    int(col[1] * 0.25 + PANEL_BG[1] * 0.75),
+                    int(col[2] * 0.25 + PANEL_BG[2] * 0.75),
+                )
                 if len(points) >= 2:
-                    pygame.draw.lines(self.screen, col, False, points, 1)
+                    pygame.draw.lines(self.screen, faint, False, points, 1)
+
+                # Bold rolling average (20-episode window)
+                window  = 20
+                avg     = [
+                    sum(history[max(0, i - window + 1): i + 1]) /
+                    min(i + 1, window)
+                    for i in range(n)
+                ]
+                avg_pts = [to_px(i, n, v) for i, v in enumerate(avg)]
+                if len(avg_pts) >= 2:
+                    pygame.draw.lines(self.screen, col, False, avg_pts, 2)
 
             pygame.draw.rect(self.screen, PANEL_LINE, pygame.Rect(gx, gy, gw, gh), 1)
 
@@ -325,33 +444,43 @@ class Visualiser:
 
         agent_list    = list(agents.items())
         n_agents      = len(agent_list)
+        n_bars        = MAX_POPULATION  # always 8 slots — constant width regardless of population
         total_rewards = [max(0.0, ag.total_reward) for _, ag in agent_list]
         max_total     = max(max(total_rewards), 1.0)
 
         bar_gap    = 5
-        bar_w_each = max(4, (rw - (n_agents - 1) * bar_gap) // n_agents)
+        bar_w_each = max(4, (rw - (n_bars - 1) * bar_gap) // n_bars)
 
-        for i, (agent_id, agent) in enumerate(agent_list):
-            col    = _agent_colour(agent_id)
-            bx     = rx + i * (bar_w_each + bar_gap)
-            reward = max(0.0, agent.total_reward)
-            fill_h = max(2, int(reward / max_total * gh))
-            by     = gy + gh - fill_h
+        for i in range(n_bars):
+            bx = rx + i * (bar_w_each + bar_gap)
+            if i < n_agents:
+                agent_id, agent = agent_list[i]
+                col    = _agent_colour(agent_id)
+                reward = max(0.0, agent.total_reward)
+                fill_h = max(2, int(reward / max_total * gh))
+                by     = gy + gh - fill_h
 
-            pygame.draw.rect(self.screen, col,
-                             pygame.Rect(bx, by, bar_w_each, fill_h))
-            pygame.draw.rect(self.screen, PANEL_LINE,
-                             pygame.Rect(bx, gy, bar_w_each, gh), 1)
+                pygame.draw.rect(self.screen, col,
+                                 pygame.Rect(bx, by, bar_w_each, fill_h))
+                pygame.draw.rect(self.screen, PANEL_LINE,
+                                 pygame.Rect(bx, gy, bar_w_each, gh), 1)
 
-            tag = self.font_sm.render(agent_id.split('-')[1], True, col)
-            self.screen.blit(tag, (bx + bar_w_each // 2 - tag.get_width() // 2,
-                                   gy + gh + 2))
+                tag = self.font_sm.render(agent_id.split('-')[1], True, col)
+                self.screen.blit(tag, (bx + bar_w_each // 2 - tag.get_width() // 2,
+                                       gy + gh + 2))
 
-            val_lbl = self.font_sm.render(f'{agent.total_reward:.0f}', True, col)
-            val_y   = by - 13
-            if val_y >= gy:
-                self.screen.blit(val_lbl,
-                                 (bx + bar_w_each // 2 - val_lbl.get_width() // 2, val_y))
+                val_lbl = self.font_sm.render(f'{agent.total_reward:.0f}', True, col)
+                val_y   = by - 13
+                if val_y >= gy:
+                    self.screen.blit(val_lbl,
+                                     (bx + bar_w_each // 2 - val_lbl.get_width() // 2, val_y))
+            else:
+                # Inactive slot — empty outline, muted label
+                pygame.draw.rect(self.screen, PANEL_LINE,
+                                 pygame.Rect(bx, gy, bar_w_each, gh), 1)
+                tag = self.font_sm.render('---', True, MUTED)
+                self.screen.blit(tag, (bx + bar_w_each // 2 - tag.get_width() // 2,
+                                       gy + gh + 2))
 
         # ── 3. LEXICON SIGNAL BAR CHART ──────────────────────────────
         lx = LINE_SECTION + BAR_SECTION + 12
@@ -401,10 +530,10 @@ class Visualiser:
         print(f'  [Screenshot] Saved → {filename}')
 
     def render(self, env, agents, channel, episode, step,
-               ep_rewards, generation):
+               ep_rewards, generation, spawn_event=None):
         self.handle_events()
         self.screen.fill(BG)
-        self._draw_grid(env)
+        self._draw_grid(env, agents, spawn_event)
         self._draw_panel(agents, channel, episode, step, ep_rewards, generation)
         self._draw_graph(agents, channel)
         pygame.display.flip()
