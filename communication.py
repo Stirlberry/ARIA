@@ -235,9 +235,14 @@ class CommunicationChannel:
                          'n_signals': N_SIGNALS})
 
     def inherit_from(self, parent_channel):
+        self.total_signals = parent_channel.total_signals
         for sig_idx, entry in self.lexicon.items():
             parent_entry = parent_channel.lexicon.get(sig_idx)
-            if parent_entry and parent_entry.assigned:
+            if parent_entry is None:
+                continue
+            entry.use_count       = parent_entry.use_count
+            entry.coord_successes = parent_entry.coord_successes
+            if parent_entry.assigned:
                 entry.symbol   = parent_entry.symbol
                 entry.assigned = True
                 if entry.symbol in self._symbol_pool:
