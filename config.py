@@ -73,10 +73,9 @@ AUTOSAVE_EVERY        = 30
 
 # Population
 INITIAL_AGENTS   = ['ARIA-CAFE', 'ARIA-BABE', 'ARIA-DEAD', 'ARIA-BEEF']
-MIN_POPULATION          = 2    # population floor
-MAX_POPULATION          = 8    # population ceiling
-POP2_CURRENCY_THRESHOLD = 12   # legacy — replaced by energy-based reproduction in Phase 3
-MIN_COORD_AGENTS    = 2    # any 2 agents on a CO node triggers coordination
+MIN_POPULATION       = 2    # population floor
+MAX_POPULATION       = 8    # population ceiling
+MIN_COORD_AGENTS     = 2    # any 2 agents on a CO node triggers coordination
 
 # Energy system (Phase 3)
 ENERGY_START         = 500   # starting energy for all new agents

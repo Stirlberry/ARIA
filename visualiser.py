@@ -4,7 +4,6 @@ Renders every step at training speed (no FPS cap).
 """
 
 import os
-import sys
 import pygame
 from collections import deque
 from config import GRID_SIZE, CELL_SIZE, FOG_RADIUS, MAX_POPULATION, ENERGY_MAX
@@ -32,9 +31,6 @@ AGENT_COLOURS = {
     'ARIA-BABE': (255, 140, 70),
     'ARIA-DEAD': (180, 110, 255),
     'ARIA-BEEF': (255, 100, 140),
-    'ARIA-FAFE': (80,  210, 200),
-    'ARIA-FADE': (255, 200, 60),
-    'ARIA-FEED': (160, 230, 100),
 }
 
 ROLE_COL = {

@@ -35,7 +35,7 @@ from budget import cost_tracker
 from environment import Environment
 from agent import ARIAAgent, make_replay_buffer
 from communication import CommunicationChannel
-from genetics import (kill_weakest, pop2_reproduce, energy_reproduce,
+from genetics import (kill_weakest, energy_reproduce,
                       PlateauMonitor, get_alpha,
                       log_energy_death, log_extinction)
 from help_system import HelpMonitor, LexiconAdvisor
@@ -45,7 +45,7 @@ from config import (
     LEXICON_LOG_PATH,
     MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
     AUTOSAVE_EVERY, ENV_DRIFT_INTERVAL,
-    MAX_POPULATION, POP2_CURRENCY_THRESHOLD,
+    MAX_POPULATION,
     CONTACT_WINDOW, CONTACT_COORD_BONUS,
     HANDSHAKE_WINDOW, HANDSHAKE_REWARD,
     ENERGY_MAX, REWARD_DEATH, REWARD_REPRODUCE,
@@ -126,10 +126,10 @@ def main():
     print(f'  Help system     : {"ON" if config.HELP_SYSTEM_ON else "OFF"}\n')
 
     start_episode = 1
-    meta, npz_data = save_system.prompt_resume()
+    meta, pt_path = save_system.prompt_resume()
     if meta is not None:
         (agents, channel, generation, last_replication_ep,
-         all_ids_ever, plateau_history, start_episode) = save_system.restore(meta, npz_data, shared_replay)
+         all_ids_ever, plateau_history, start_episode) = save_system.restore(meta, pt_path, shared_replay)
         for agent_id in agents:
             help_mon.register_agent(agent_id)
         for agent_id, history in plateau_history.items():
@@ -167,7 +167,7 @@ def main():
                             agents[initiator].record_replication_request(episode)
                 if should_kill:
                     print(f'\n  [Gen {generation}] Death at episode {episode} — {kill_reason}')
-                    agents, death_summary = kill_weakest(agents, episode, set(all_ids_ever))
+                    agents, death_summary = kill_weakest(agents, episode)
                     last_replication_ep = episode
                     plateau_mon.deregister(death_summary['retired_id'])
                     help_mon.register_agent(death_summary['retired_id'])  # flush any pending

@@ -41,14 +41,30 @@ def _extract_json(text):
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # Find the first balanced {...} block and parse that
-    match = re.search(r'\{.*?\}', text, re.DOTALL)
+    # Find the outermost {...} block — greedy so nested objects are included
+    match = re.search(r'\{.*\}', text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group())
         except json.JSONDecodeError:
             pass
     return {}
+
+
+def _call_claude_api(payload_dict, timeout=15):
+    """Call Anthropic Messages API. Returns parsed response dict or raises on error."""
+    payload = json.dumps(payload_dict).encode()
+    req = urllib.request.Request(
+        'https://api.anthropic.com/v1/messages',
+        data=payload,
+        headers={
+            'Content-Type':      'application/json',
+            'x-api-key':         ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01'
+        }
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
 
 SEARCH_QUERIES = {
     'low_reward':      'Q-learning reinforcement learning low reward convergence improvement',
@@ -230,33 +246,18 @@ Example: {{"REWARD_COORD": 45.0, "LEARNING_RATE": 0.15}}
 If no changes are warranted: {{}}"""
 
         try:
-            import urllib.request as ur
-            payload = json.dumps({
+            result = _call_claude_api({
                 'model': 'claude-haiku-4-5-20251001',
                 'max_tokens': 256,
                 'messages': [{'role': 'user', 'content': prompt}]
-            }).encode()
-
-            req = ur.Request(
-                'https://api.anthropic.com/v1/messages',
-                data=payload,
-                headers={
-                    'Content-Type':      'application/json',
-                    'x-api-key':         ANTHROPIC_API_KEY,
-                    'anthropic-version': '2023-06-01'
-                }
-            )
-            with ur.urlopen(req, timeout=15) as r:
-                result = json.loads(r.read().decode())
+            })
 
             usage = result.get('usage', {})
             cost_tracker.record(usage.get('input_tokens', 0),
                                 usage.get('output_tokens', 0), 'help_analysis')
             print(f'  [Budget] {cost_tracker.session_str()}')
 
-            text = result['content'][0]['text'].strip()
-            text = text.replace('```json', '').replace('```', '').strip()
-            suggestions = _extract_json(text)
+            suggestions = _extract_json(result['content'][0]['text'])
 
             validated = {}
             for param, value in suggestions.items():
@@ -304,32 +305,17 @@ If no changes are warranted: {{}}"""
         )
 
         try:
-            import urllib.request as ur
-            payload = json.dumps({
+            result = _call_claude_api({
                 'model': 'claude-haiku-4-5-20251001',
                 'max_tokens': 64,
                 'messages': [{'role': 'user', 'content': prompt}]
-            }).encode()
-
-            req = ur.Request(
-                'https://api.anthropic.com/v1/messages',
-                data=payload,
-                headers={
-                    'Content-Type':      'application/json',
-                    'x-api-key':         ANTHROPIC_API_KEY,
-                    'anthropic-version': '2023-06-01'
-                }
-            )
-            with ur.urlopen(req, timeout=10) as r:
-                result = json.loads(r.read().decode())
+            }, timeout=10)
 
             usage = result.get('usage', {})
             cost_tracker.record(usage.get('input_tokens', 0),
                                 usage.get('output_tokens', 0), 'subgoal')
 
-            text = result['content'][0]['text'].strip()
-            text = text.replace('```json', '').replace('```', '').strip()
-            spec = _extract_json(text)
+            spec = _extract_json(result['content'][0]['text'])
 
             if spec.get('condition') not in _VALID_SPEC_CONDITIONS:
                 spec['condition'] = 'face_coord'
@@ -530,32 +516,17 @@ class LexiconAdvisor:
         )
 
         try:
-            import urllib.request as ur
-            payload = json.dumps({
+            result = _call_claude_api({
                 'model': 'claude-haiku-4-5-20251001',
                 'max_tokens': 64,
                 'messages': [{'role': 'user', 'content': prompt}]
-            }).encode()
-
-            req = ur.Request(
-                'https://api.anthropic.com/v1/messages',
-                data=payload,
-                headers={
-                    'Content-Type':      'application/json',
-                    'x-api-key':         ANTHROPIC_API_KEY,
-                    'anthropic-version': '2023-06-01'
-                }
-            )
-            with ur.urlopen(req, timeout=15) as r:
-                result = json.loads(r.read().decode())
+            })
 
             usage = result.get('usage', {})
             cost_tracker.record(usage.get('input_tokens', 0),
                                 usage.get('output_tokens', 0), 'lexicon_advisor')
 
-            text = result['content'][0]['text'].strip()
-            text = text.replace('```json', '').replace('```', '').strip()
-            adjustments = _extract_json(text)
+            adjustments = _extract_json(result['content'][0]['text'])
 
             applied = {}
             if 'SIGNAL_REWARD' in adjustments:

@@ -126,8 +126,7 @@ class CompoundLexicon:
                 e = CompoundEntry(*key)
                 e.symbol       = pe.symbol
                 e.crystallised = True
-                obj_entries_key = key
-                self.entries[obj_entries_key] = e
+                self.entries[key] = e
                 if e.symbol in self._symbol_pool:
                     self._symbol_pool.remove(e.symbol)
 
@@ -334,7 +333,7 @@ class CommunicationChannel:
     def _ts():
         return datetime.now().isoformat()
 
-    def _write(self, record, mode='a'):
+    def _write(self, record):
         self._log_buf.append(json.dumps(record))
         if len(self._log_buf) >= self._BUF_LIMIT:
             self.flush_log()

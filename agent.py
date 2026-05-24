@@ -21,9 +21,12 @@ Bottleneck fixes applied:
   - torch.from_numpy() for zero-copy tensor construction in training.
 """
 
+import json
+import os
 import random
 import numpy as np
 import torch
+from datetime import datetime
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -376,16 +379,17 @@ class EpisodicMemory:
 
 # State layout: s[2]=currency_dir, s[3]=coord_dir, s[4]=partner_dir (8=absent)
 #               s[5]=currency_dist_bin, s[6]=coord_dist_bin, s[7]=partner_dist_bin
-_TRACKABLE_CONDITIONS = [
-    ('coord_close',    lambda s: s[6] == 0),
-    ('coord_near',     lambda s: s[6] <= 1),
-    ('currency_close', lambda s: s[5] == 0),
-    ('partner_close',  lambda s: s[7] == 0),
-    ('avoid_partner',  lambda s: s[7] == 2),
-    ('face_coord',     lambda s: s[3] != 8),
-    ('face_partner',   lambda s: s[4] != 8),
-    ('face_currency',  lambda s: s[2] != 8),
-]
+_SPEC_CONDITIONS = {
+    'coord_close':    lambda s: s[6] == 0,
+    'coord_near':     lambda s: s[6] <= 1,
+    'currency_close': lambda s: s[5] == 0,
+    'partner_close':  lambda s: s[7] == 0,
+    'avoid_partner':  lambda s: s[7] == 2,
+    'face_coord':     lambda s: s[3] != 8,
+    'face_partner':   lambda s: s[4] != 8,
+    'face_currency':  lambda s: s[2] != 8,
+}
+_TRACKABLE_CONDITIONS = list(_SPEC_CONDITIONS.items())
 
 
 class GoalDiscovery:
@@ -465,17 +469,6 @@ def _sg_coord_nearby(_):
 
 def _sg_partner_close(_):
     return lambda s: 0.3 if s[7] == 0 else 0.0
-
-_SPEC_CONDITIONS = {
-    'coord_close':    lambda s: s[6] == 0,
-    'coord_near':     lambda s: s[6] <= 1,
-    'currency_close': lambda s: s[5] == 0,
-    'partner_close':  lambda s: s[7] == 0,
-    'face_coord':     lambda s: s[3] != 8,
-    'face_currency':  lambda s: s[2] != 8,
-    'face_partner':   lambda s: s[4] != 8,
-    'avoid_partner':  lambda s: s[7] == 2,
-}
 
 def _sg_from_spec(params):
     condition = params.get('condition', 'face_coord')
@@ -632,11 +625,7 @@ class ARIAAgent:
         self.episode_reward = 0.0
         self.total_reward   = 0.0
         self.episodes       = 0
-        self.generation     = self._parse_generation(agent_id)
-
-    @staticmethod
-    def _parse_generation(agent_id):
-        return 0
+        self.generation     = 0
 
     def select_action(self, state):
         if random.random() < self.epsilon:
@@ -836,8 +825,6 @@ class ARIAAgent:
         self._log_discovered_goal(spec, lift)
 
     def _log_discovered_goal(self, spec, lift):
-        import json, os
-        from datetime import datetime
         os.makedirs(os.path.dirname(GOAL_DISCOVERY_LOG_PATH), exist_ok=True)
         record = {
             'event':     'goal_discovered',
@@ -902,8 +889,8 @@ class ARIAAgent:
 
     @staticmethod
     def _cross_hyperparam(val_a, val_b, w_a, lo, hi):
-        val = val_a if np.random.random() < w_a else val_b
-        val += np.random.normal(0, HYPERPARAM_MUTATION_STD * max(abs(val), 1e-6))
+        val = val_a if random.random() < w_a else val_b
+        val += random.gauss(0, HYPERPARAM_MUTATION_STD * max(abs(val), 1e-6))
         return float(np.clip(val, lo, hi))
 
     @classmethod
@@ -922,7 +909,7 @@ class ARIAAgent:
         hp = {name: cls._cross_hyperparam(
                 getattr(agent_a, name), getattr(agent_b, name), w_a, lo, hi)
               for name, (lo, hi) in _HP_BOUNDS.items()}
-        hp['activation'] = agent_a.activation if np.random.random() < w_a else agent_b.activation
+        hp['activation'] = agent_a.activation if random.random() < w_a else agent_b.activation
 
         child = cls(child_id, replay=shared_replay, energy=ENERGY_NEWBORN, **hp)
         child.epsilon = min(agent_a.epsilon, agent_b.epsilon)
@@ -949,10 +936,11 @@ class ARIAAgent:
         child.target_net.load_state_dict(child.online_net.state_dict())
 
         stronger = agent_a if w_a >= 0.5 else agent_b
+        weaker   = agent_b if stronger is agent_a else agent_a
         child.cultural_memory.inherit_from(stronger.cultural_memory)
         child.cultural_memory.seed_replay(child.replay, expected_size=_INPUT_SIZE)
 
-        for parent in (stronger, agent_a, agent_b):
+        for parent in (stronger, weaker):
             if parent.sub_goal and parent.sub_goal.worth_inheriting and child.sub_goal is None:
                 child.sub_goal = SubGoal(
                     parent.sub_goal.template,

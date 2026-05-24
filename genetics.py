@@ -19,7 +19,6 @@ from config import (
     PLATEAU_WINDOW, PLATEAU_DELTA_THRESH,
     MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
     MIN_POPULATION, MAX_POPULATION, SELF_REPL_FITNESS_MIN,
-    POP2_CURRENCY_THRESHOLD,
 )
 
 
@@ -115,7 +114,7 @@ def next_agent_id(parent_a_id, parent_b_id, all_ids_ever):
     raise RuntimeError('Exhausted all 4-digit hex agent IDs')
 
 
-def kill_weakest(agents, episode, all_ids_ever):
+def kill_weakest(agents, episode):
     """
     Remove the weakest agent from the population (death phase).
     Returns (reduced_agents, death_summary). Population drops by 1.
@@ -132,13 +131,6 @@ def kill_weakest(agents, episode, all_ids_ever):
     new_agents = {a.agent_id: a for a in agents.values()
                   if a.agent_id != dying.agent_id}
     return new_agents, summary
-
-
-def pop2_reproduce(parent_a, parent_b, agents, channel, episode,
-                   all_ids_ever, shared_replay=None):
-    """Legacy — kept for save-restore compatibility. Use energy_reproduce for new runs."""
-    return energy_reproduce(parent_a, parent_b, agents, channel, episode,
-                            all_ids_ever, shared_replay=shared_replay)
 
 
 def energy_reproduce(parent_a, parent_b, agents, channel, episode,
