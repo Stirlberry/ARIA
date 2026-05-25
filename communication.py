@@ -132,13 +132,16 @@ class CompoundLexicon:
 
     def inherit_from(self, parent):
         for key, pe in parent.entries.items():
-            if pe.crystallised and key not in self.entries:
+            if key not in self.entries:
                 e = CompoundEntry(*key)
-                e.symbol       = pe.symbol
-                e.crystallised = True
+                e.use_count       = pe.use_count
+                e.coord_successes = pe.coord_successes
+                if pe.crystallised:
+                    e.symbol       = pe.symbol
+                    e.crystallised = True
+                    if e.symbol in self._symbol_pool:
+                        self._symbol_pool.remove(e.symbol)
                 self.entries[key] = e
-                if e.symbol in self._symbol_pool:
-                    self._symbol_pool.remove(e.symbol)
 
 
 class SequenceEntry:
@@ -228,13 +231,16 @@ class SequenceLexicon:
 
     def inherit_from(self, parent):
         for key, pe in parent.entries.items():
-            if pe.crystallised and key not in self.entries:
+            if key not in self.entries:
                 e = SequenceEntry(key)
-                e.symbol       = pe.symbol
-                e.crystallised = True
+                e.use_count       = pe.use_count
+                e.coord_successes = pe.coord_successes
+                if pe.crystallised:
+                    e.symbol       = pe.symbol
+                    e.crystallised = True
+                    if e.symbol in self._symbol_pool:
+                        self._symbol_pool.remove(e.symbol)
                 self.entries[key] = e
-                if e.symbol in self._symbol_pool:
-                    self._symbol_pool.remove(e.symbol)
 
 
 class CommunicationChannel:

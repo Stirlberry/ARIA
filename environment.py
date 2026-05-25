@@ -147,7 +147,7 @@ class Environment:
     def _nearest_dist_bin(self, from_pos, node_set):
         """Chebyshev distance to nearest node, bucketed: 0=close(≤3), 1=mid(4-8), 2=far(>8)."""
         if not node_set:
-            return 0
+            return 2
         dist = min(max(abs(n[0] - from_pos[0]), abs(n[1] - from_pos[1])) for n in node_set)
         if dist <= 3:
             return 0
@@ -213,7 +213,7 @@ class Environment:
             partner_dist = self._nearest_dist_bin(pos, {partner_pos})
         else:
             partner_dir  = 8
-            partner_dist = 0
+            partner_dist = 2
 
         def _chebyshev(a):
             return max(abs(self.agent_positions[a][0] - pos[0]),
@@ -406,6 +406,11 @@ class Environment:
         self._msg_buffers[agent_id]    = []
         self._last_msgs[agent_id]      = [_NO_SIGNAL] * MAX_MSG_LEN
         self._co_hold_steps.setdefault(agent_id, 0)
+
+    def clear_msg_buffer(self, agent_id):
+        """Clear an agent's outgoing message buffer to suppress spawn-pause phantom signals."""
+        if agent_id in self._msg_buffers:
+            self._msg_buffers[agent_id] = []
 
     # ── Accessors ──────────────────────────────────────────────────────────────
 

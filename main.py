@@ -201,12 +201,6 @@ def main():
                     actions[agent_id]      = action
                     signals_sent[agent_id] = ARIAAgent.get_signal_from_action(action)
 
-                for agent_id, sig in signals_sent.items():
-                    if sig is not None:
-                        last_signal_step[agent_id] = step
-                        last_signal_pos[agent_id]  = pre_positions.get(agent_id)
-                        last_signal_idx[agent_id]  = sig
-
                 # ── Birth sequence: pause parents, reveal child on countdown ──
                 if spawn_event is not None:
                     pa_id = spawn_event['parent_a_id']
@@ -218,6 +212,8 @@ def main():
                         if spawn_event['pause_remaining'] > 0:
                             actions[pa_id] = 8
                             actions[pb_id] = 8
+                            signals_sent[pa_id] = None
+                            signals_sent[pb_id] = None
                         else:
                             # Pause over — separate parents and birth child
                             actions[pa_id] = spawn_event['dir_a']
@@ -228,6 +224,7 @@ def main():
                                 parent_a, parent_b, agents, channel, episode,
                                 set(all_ids_ever), shared_replay=shared_replay
                             )
+                            channel.flush_log()
                             channel             = new_channel
                             child_id            = summary['child_id']
                             all_ids_ever.append(child_id)
@@ -237,7 +234,11 @@ def main():
                             plateau_mon.register(child_id)
                             env.add_newborn(child_id, spawn_event['spawn_point'])
                             last_signal_step[child_id]   = -(config.SIGNAL_WINDOW + 1)
+                            last_signal_pos[child_id]    = None
+                            last_signal_idx[child_id]    = None
                             last_received_step[child_id] = -(config.SIGNAL_WINDOW + 1)
+                            last_message_step[child_id]  = -(config.SIGNAL_WINDOW + 1)
+                            last_message_idx[child_id]   = None
                             contact_log[child_id]        = -(CONTACT_WINDOW + 1)
                             ep_rewards[child_id]         = 0.0
                             actions[child_id]            = 8
@@ -254,9 +255,21 @@ def main():
                                   f'drain={hp["drain_rate"]}\n')
                             spawn_event = None
 
+                # Signal tracking: runs after spawn override so parents aren't tracked during pause
+                for agent_id, sig in signals_sent.items():
+                    if sig is not None:
+                        last_signal_step[agent_id] = step
+                        last_signal_pos[agent_id]  = pre_positions.get(agent_id)
+                        last_signal_idx[agent_id]  = sig
+
                 next_states, rewards, done, info, signals_received = env.step(
                     actions, signals_sent
                 )
+
+                # Clear spawn-pause parents' message buffers to suppress phantom signals
+                if spawn_event is not None:
+                    env.clear_msg_buffer(spawn_event['parent_a_id'])
+                    env.clear_msg_buffer(spawn_event['parent_b_id'])
 
                 positions  = env.get_positions()
 
@@ -341,7 +354,8 @@ def main():
                                 elif d <= SHOUT_RANGE:
                                     rewards[agent_id] += REWARD_SHOUT_COORD
                             else:
-                                rewards[agent_id] += config.SIGNAL_REWARD
+                                if last_signal_idx.get(agent_id) is not None:
+                                    rewards[agent_id] += config.SIGNAL_REWARD
                     for agent_id in info['coord_agents']:
                         if agent_id in agents and agent_id not in newly_dead:
                             if (step - last_received_step.get(

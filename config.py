@@ -69,7 +69,7 @@ SUB_GOAL_MAX_BONUS = 2.0   # max reward bonus per step from a sub-goal
 # Training
 MAX_EPISODES          = 20000
 MAX_STEPS_PER_EPISODE = 500
-AUTOSAVE_EVERY        = 30
+AUTOSAVE_EVERY        = 50
 
 # Population
 INITIAL_AGENTS   = ['ARIA-CAFE', 'ARIA-BABE', 'ARIA-DEAD', 'ARIA-BEEF']
