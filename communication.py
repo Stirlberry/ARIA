@@ -120,6 +120,16 @@ class CompoundLexicon:
                 obj._symbol_pool.remove(e.symbol)
         return obj
 
+    def credit_coord_pair(self, sig_a, sig_b):
+        """Credit a signal pair with a coord success (window-based, no use_count bump)."""
+        key = (min(sig_a, sig_b), max(sig_a, sig_b))
+        if key not in self.entries:
+            self.entries[key] = CompoundEntry(*key)
+        entry = self.entries[key]
+        entry.coord_successes += 1
+        if not entry.crystallised and entry.coord_successes >= COMPOUND_THRESHOLD:
+            self._crystallise(entry)
+
     def inherit_from(self, parent):
         for key, pe in parent.entries.items():
             if pe.crystallised and key not in self.entries:
@@ -203,6 +213,18 @@ class SequenceLexicon:
             if e.crystallised and e.symbol in obj._symbol_pool:
                 obj._symbol_pool.remove(e.symbol)
         return obj
+
+    def credit_coord(self, sequence):
+        """Credit a sequence with a coord success (window-based, no use_count bump)."""
+        key = tuple(sequence)
+        if len(key) < 2:
+            return
+        if key not in self.entries:
+            self.entries[key] = SequenceEntry(key)
+        entry = self.entries[key]
+        entry.coord_successes += 1
+        if not entry.crystallised and entry.coord_successes >= SEQUENCE_THRESHOLD:
+            self._crystallise(entry)
 
     def inherit_from(self, parent):
         for key, pe in parent.entries.items():

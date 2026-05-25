@@ -182,6 +182,9 @@ def main():
             extinct            = False
             last_signal_step   = {a: -(config.SIGNAL_WINDOW + 1) for a in agents}
             last_signal_pos    = {}
+            last_signal_idx    = {}
+            last_message_step  = {}
+            last_message_idx   = {}
             last_received_step = {a: -(config.SIGNAL_WINDOW + 1) for a in agents}
             contact_log        = {a: -(CONTACT_WINDOW + 1) for a in agents}
             spawn_event        = None
@@ -202,6 +205,7 @@ def main():
                     if sig is not None:
                         last_signal_step[agent_id] = step
                         last_signal_pos[agent_id]  = pre_positions.get(agent_id)
+                        last_signal_idx[agent_id]  = sig
 
                 # ── Birth sequence: pause parents, reveal child on countdown ──
                 if spawn_event is not None:
@@ -374,6 +378,33 @@ def main():
                 # Sequence lexicon: record completed messages
                 for agent_id, msg_tokens in info.get('messages_sent', {}).items():
                     channel.record_message(agent_id, msg_tokens, info['coord_achieved'])
+                    last_message_step[agent_id] = step
+                    last_message_idx[agent_id]  = msg_tokens
+
+                # Window-based coord credit for compounds and sequences.
+                # When coord fires, agents used move actions to arrive — no same-step signals.
+                # Credit pairs/sequences from within SIGNAL_WINDOW of the coord event.
+                if info['coord_achieved']:
+                    window_sigs = []
+                    for aid in info['coord_agents']:
+                        if signals_sent.get(aid) is None:  # didn't signal this step
+                            sig_step = last_signal_step.get(aid, -(config.SIGNAL_WINDOW + 1))
+                            if step - sig_step <= config.SIGNAL_WINDOW:
+                                sig_idx = last_signal_idx.get(aid)
+                                if sig_idx is not None:
+                                    window_sigs.append(sig_idx)
+                    for i in range(len(window_sigs)):
+                        for j in range(i + 1, len(window_sigs)):
+                            channel.compound_lexicon.credit_coord_pair(
+                                window_sigs[i], window_sigs[j])
+
+                    for aid in info['coord_agents']:
+                        if aid not in info.get('messages_sent', {}):  # no message this step
+                            msg_step = last_message_step.get(aid)
+                            if msg_step is not None and step - msg_step <= config.SIGNAL_WINDOW:
+                                msg_tokens = last_message_idx.get(aid)
+                                if msg_tokens:
+                                    channel.sequence_lexicon.credit_coord(msg_tokens)
 
                 agent_list = list(agents.keys())
 
