@@ -241,7 +241,8 @@ class Visualiser:
 
         blit('ARIA', WHITE, 'lg')
         blit(f'Gen {generation}  Ep {episode:5d}  Step {step:4d}', MUTED, 'sm')
-        blit(f'epsilon: {list(agents.values())[0].epsilon:.4f}', MUTED, 'sm')
+        if agents:
+            blit(f'epsilon: {list(agents.values())[0].epsilon:.4f}', MUTED, 'sm')
         divider()
 
         def _avg_reward(a):

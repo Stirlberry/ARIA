@@ -6,10 +6,6 @@ Phase 3: Energy-based survival, death, ghost nodes, emergent communication,
 
 Run:
     python main.py
-
-Optional (for Claude-powered help + sub-goal generation):
-    export ANTHROPIC_API_KEY=your_key_here
-    python main.py
 """
 
 import sys
@@ -46,11 +42,9 @@ from config import (
     MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
     AUTOSAVE_EVERY, ENV_DRIFT_INTERVAL,
     MAX_POPULATION,
-    CONTACT_WINDOW, CONTACT_COORD_BONUS,
     ENERGY_MAX, REWARD_DEATH, REWARD_REPRODUCE,
     REPRODUCTION_THRESHOLD, REPRODUCTION_COST,
-    REWARD_CHATTER_COORD, REWARD_SHOUT_COORD, REWARD_SIGNAL_ACTED,
-    CHATTER_RANGE, SHOUT_RANGE, N_SIGNALS, SPAWN_PAUSE_STEPS,
+    SPAWN_PAUSE_STEPS,
 )
 
 
@@ -96,7 +90,7 @@ def main():
 
     print('=' * 64)
     print('  ARIA — Adaptive Reasoning and Interaction Agent')
-    print('  Phase 2: Population Dynamics + Brain Evolution')
+    print('  Phase 3: Survival, Reproduction, Emergent Communication')
     print('=' * 64)
     print(f'  Founders        : {" + ".join(INITIAL_AGENTS)}')
     print(f'  Replication     : self-directed  '
@@ -161,7 +155,7 @@ def main():
                     agents, death_summary = kill_weakest(agents, episode)
                     last_replication_ep = episode
                     plateau_mon.deregister(death_summary['retired_id'])
-                    help_mon.register_agent(death_summary['retired_id'])  # flush any pending
+                    help_mon.deregister_agent(death_summary['retired_id'])
                     env.reset(agent_ids=list(agents.keys()), soft=True)
                     print(f'  Died    : {death_summary["retired_id"]} '
                           f'(reward {death_summary["retired_total_reward"]:.1f})')
@@ -177,24 +171,20 @@ def main():
 
             # Episode setup
             states             = env.reset(agent_ids=list(agents.keys()), soft=True)
-            ep_rewards         = {a: 0.0 for a in agents}
-            ep_coord_any       = False
-            extinct            = False
-            last_signal_step   = {a: -(config.SIGNAL_WINDOW + 1) for a in agents}
-            last_signal_pos    = {}
-            last_signal_idx    = {}
-            last_message_step  = {}
-            last_message_idx   = {}
-            last_received_step = {a: -(config.SIGNAL_WINDOW + 1) for a in agents}
-            contact_log        = {a: -(CONTACT_WINDOW + 1) for a in agents}
-            spawn_event        = None
+            ep_rewards        = {a: 0.0 for a in agents}
+            ep_coord_any      = False
+            extinct           = False
+            last_signal_step  = {a: -(config.SIGNAL_WINDOW + 1) for a in agents}
+            last_signal_idx   = {}
+            last_message_step = {}
+            last_message_idx  = {}
+            spawn_event       = None
 
 
             for step in range(MAX_STEPS_PER_EPISODE):
 
-                pre_positions = env.get_positions()
-                actions       = {}
-                signals_sent  = {a: None for a in agents}
+                actions      = {}
+                signals_sent = {a: None for a in agents}
 
                 for agent_id, agent in agents.items():
                     action = agent.select_action(states[agent_id])
@@ -216,8 +206,10 @@ def main():
                             signals_sent[pb_id] = None
                         else:
                             # Pause over — separate parents and birth child
-                            actions[pa_id] = spawn_event['dir_a']
-                            actions[pb_id] = spawn_event['dir_b']
+                            actions[pa_id]      = spawn_event['dir_a']
+                            actions[pb_id]      = spawn_event['dir_b']
+                            signals_sent[pa_id] = None
+                            signals_sent[pb_id] = None
                             parent_a = agents[pa_id]
                             parent_b = agents[pb_id]
                             agents, new_channel, summary = energy_reproduce(
@@ -233,14 +225,11 @@ def main():
                             help_mon.register_agent(child_id)
                             plateau_mon.register(child_id)
                             env.add_newborn(child_id, spawn_event['spawn_point'])
-                            last_signal_step[child_id]   = -(config.SIGNAL_WINDOW + 1)
-                            last_signal_pos[child_id]    = None
-                            last_signal_idx[child_id]    = None
-                            last_received_step[child_id] = -(config.SIGNAL_WINDOW + 1)
-                            last_message_step[child_id]  = -(config.SIGNAL_WINDOW + 1)
-                            last_message_idx[child_id]   = None
-                            contact_log[child_id]        = -(CONTACT_WINDOW + 1)
-                            ep_rewards[child_id]         = 0.0
+                            last_signal_step[child_id]  = -(config.SIGNAL_WINDOW + 1)
+                            last_signal_idx[child_id]   = None
+                            last_message_step[child_id] = -(config.SIGNAL_WINDOW + 1)
+                            last_message_idx[child_id]  = None
+                            ep_rewards[child_id]        = 0.0
                             actions[child_id]            = 8
                             signals_sent[child_id]       = None
                             vis.notify_replication(summary)
@@ -259,7 +248,6 @@ def main():
                 for agent_id, sig in signals_sent.items():
                     if sig is not None:
                         last_signal_step[agent_id] = step
-                        last_signal_pos[agent_id]  = pre_positions.get(agent_id)
                         last_signal_idx[agent_id]  = sig
 
                 next_states, rewards, done, info, signals_received = env.step(
@@ -271,23 +259,7 @@ def main():
                     env.clear_msg_buffer(spawn_event['parent_a_id'])
                     env.clear_msg_buffer(spawn_event['parent_b_id'])
 
-                positions  = env.get_positions()
-
-                # ── Track received signals for REWARD_SIGNAL_ACTED ────────────
-                for agent_id in agents:
-                    a_pos = pre_positions.get(agent_id)
-                    if a_pos is None:
-                        continue
-                    for other_id, sig in signals_sent.items():
-                        if other_id == agent_id or sig is None:
-                            continue
-                        o_pos = pre_positions.get(other_id)
-                        if o_pos is None:
-                            continue
-                        if (max(abs(a_pos[0] - o_pos[0]),
-                                abs(a_pos[1] - o_pos[1])) <= SHOUT_RANGE):
-                            last_received_step[agent_id] = step
-                            break
+                positions = env.get_positions()
 
                 # ── Energy: drain, gain, cap ───────────────────────────────────
                 pre_energies = {}
@@ -334,45 +306,11 @@ def main():
 
                 if info['coord_achieved']:
                     ep_coord_any = True
-                    coord_pos    = [positions.get(a) for a in info['coord_agents']
-                                    if positions.get(a) is not None]
-                    for agent_id in list(agents.keys()):
-                        if agent_id in newly_dead:
-                            continue
-                        if (step - last_signal_step.get(
-                                agent_id, -(config.SIGNAL_WINDOW + 1))
-                                <= config.SIGNAL_WINDOW):
-                            sig_pos = last_signal_pos.get(agent_id)
-                            if sig_pos is not None and coord_pos:
-                                d = min(
-                                    max(abs(sig_pos[0] - cp[0]),
-                                        abs(sig_pos[1] - cp[1]))
-                                    for cp in coord_pos
-                                )
-                                if d <= CHATTER_RANGE:
-                                    rewards[agent_id] += REWARD_CHATTER_COORD
-                                elif d <= SHOUT_RANGE:
-                                    rewards[agent_id] += REWARD_SHOUT_COORD
-                            else:
-                                if last_signal_idx.get(agent_id) is not None:
-                                    rewards[agent_id] += config.SIGNAL_REWARD
-                    for agent_id in info['coord_agents']:
-                        if agent_id in agents and agent_id not in newly_dead:
-                            if (step - last_received_step.get(
-                                    agent_id, -(config.SIGNAL_WINDOW + 1))
-                                    <= config.SIGNAL_WINDOW):
-                                rewards[agent_id] += REWARD_SIGNAL_ACTED
-                    # Contact coordination bonus: meet → talk → act together
-                    recent = [a for a in info['coord_agents']
-                              if step - contact_log.get(a, -(CONTACT_WINDOW + 1)) <= CONTACT_WINDOW]
-                    if len(recent) >= 2:
-                        for a in recent:
-                            rewards[a] += CONTACT_COORD_BONUS
 
                 # Record individual signals and compound pairs
                 active_sigs = []
                 for agent_id, sig in signals_sent.items():
-                    if sig is not None:
+                    if sig is not None and agent_id not in newly_dead:
                         channel.record_signal(
                             agent_id, sig,
                             states[agent_id],
@@ -445,8 +383,8 @@ def main():
                                     'parent_a_id':     a_id,
                                     'parent_b_id':     b_id,
                                     'spawn_point':     positions.get(a_id),
-                                    'pause_remaining': SPAWN_PAUSE_STEPS,
-                                    'pause_total':     SPAWN_PAUSE_STEPS,
+                                    'pause_remaining': SPAWN_PAUSE_STEPS + 1,
+                                    'pause_total':     SPAWN_PAUSE_STEPS + 1,
                                     'dir_a':           dir_a,
                                     'dir_b':           dir_b,
                                 }
@@ -471,16 +409,6 @@ def main():
                     ep_rewards[agent_id] += rewards[agent_id]
 
                 states = {a: next_states[a] for a in agents if a in next_states}
-
-                # ── Contact tracking: collision + signal → log for both agents ──
-                for i in range(len(agent_list)):
-                    for j in range(i + 1, len(agent_list)):
-                        a_id, b_id = agent_list[i], agent_list[j]
-                        if (positions.get(a_id) == positions.get(b_id) and
-                                (signals_sent.get(a_id) is not None or
-                                 signals_sent.get(b_id) is not None)):
-                            contact_log[a_id] = step
-                            contact_log[b_id] = step
 
                 vis.render(env, agents, channel, episode, step,
                            ep_rewards, generation, spawn_event=spawn_event)

@@ -59,6 +59,7 @@ def save_checkpoint(episode, agents, channel, generation,
             'reputation':           dict(agent.reputation),
             'coord_reward_total':   round(float(agent.coord_reward_total), 4),
             'currency_reward_total': round(float(agent.currency_reward_total), 4),
+            'goal_discovery_last_crystallise_ep': int(agent.goal_discovery._last_crystallise_ep),
         }
 
     torch.save(weights, pt_path)
@@ -204,6 +205,8 @@ def restore(meta, pt_path, shared_replay=None):
         agent.reputation             = dict(am.get('reputation', {}))
         agent.coord_reward_total     = float(am.get('coord_reward_total', 0.0))
         agent.currency_reward_total  = float(am.get('currency_reward_total', 0.0))
+        agent.goal_discovery._last_crystallise_ep = int(
+            am.get('goal_discovery_last_crystallise_ep', 0))
         agents[agent_id]        = agent
 
     channel               = CommunicationChannel(append_log=True)

@@ -36,7 +36,7 @@ from config import (
     GRID_SIZE, N_SIGNALS, MAX_MSG_LEN,
     LEARNING_RATE, DISCOUNT_FACTOR,
     EPSILON_START, EPSILON_END, EPSILON_DECAY,
-    HIDDEN_SIZE, N_LAYERS_DEFAULT, ACTIVATION_OPTIONS,
+    HIDDEN_SIZE, N_LAYERS_DEFAULT,
     BATCH_SIZE, REPLAY_BUFFER_SIZE,
     MIN_REPLAY_SIZE, TARGET_UPDATE_FREQ, TRAIN_FREQ,
     MUTATION_STD, INTRINSIC_BETA, EPISODIC_BETA, HYPERPARAM_MUTATION_STD,
@@ -47,9 +47,7 @@ from config import (
     GOAL_DISCOVERY_MIN_SAMPLES, GOAL_DISCOVERY_CRYSTALLISE_EVERY,
     GOAL_DISCOVERY_MIN_LIFT, GOAL_DISCOVERY_BONUS, GOAL_DISCOVERY_LOG_PATH,
     SHARED_REPLAY_SIZE, PER_ALPHA, PER_BETA_START, PER_BETA_STEPS,
-    POTENTIAL_COORD_WEIGHT, POTENTIAL_CURRENCY_WEIGHT,
     TOM_LR, TOM_POS_WEIGHT, TOM_INTENT_THRESHOLD, TOM_BONUS_SCALE,
-    PLATEAU_DELTA_THRESH,
     ENERGY_START, ENERGY_MAX, ENERGY_NEWBORN,
     ENERGY_DRAIN_LOW, ENERGY_DRAIN_MED, ENERGY_DRAIN_HIGH,
 )
@@ -319,14 +317,6 @@ def _encode(state, energy=ENERGY_START):
         vec[off + tok] = 1.0; off += N_SIGNALS + 1
     vec[off + _energy_bin(energy)] = 1.0; off += _N_ENERGY_BINS
     return vec
-
-
-def _potential(state):
-    """Φ(s): proximity bonus for coord and currency nodes. Higher = closer."""
-    coord_dist    = min(state[6], 2)
-    currency_dist = min(state[5], 2)
-    return (POTENTIAL_COORD_WEIGHT    * (2 - coord_dist) +
-            POTENTIAL_CURRENCY_WEIGHT * (2 - currency_dist))
 
 
 # ── Cultural inheritance ───────────────────────────────────────────────────────
@@ -680,15 +670,12 @@ class ARIAAgent:
                 self.tom_optimizer.step()
                 self._tom_steps += 1
 
-        # ── Potential-based dense reward shaping ───────────────────────────────
-        shaping = DISCOUNT_FACTOR * _potential(next_state) - _potential(state)
-
         # ── Reputation bonus: extra reward when coordinating with trusted partners
         rep_bonus = 0.0
         if coord_achieved and self.reputation:
             rep_bonus = np.mean(list(self.reputation.values())) * _REP_BONUS_SCALE
 
-        augmented = reward + shaping + global_cur + ep_cur + sg_bonus + tom_bonus + rep_bonus
+        augmented = reward + global_cur + ep_cur + sg_bonus + tom_bonus + rep_bonus
 
         sv  = _encode(state,      pre_energy if pre_energy is not None else self.energy)
         nsv = _encode(next_state, self.energy)

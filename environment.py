@@ -97,8 +97,11 @@ class Environment:
                             self.agent_positions[a] = pos
                             occupied.add(pos)
                             break
-            self._msg_buffers = {a: [] for a in self.agent_ids}
-            self._last_msgs   = {a: [_NO_SIGNAL] * MAX_MSG_LEN for a in self.agent_ids}
+            old_bufs = self._msg_buffers
+            old_msgs = self._last_msgs
+            self._msg_buffers = {a: old_bufs.get(a, []) for a in self.agent_ids}
+            self._last_msgs   = {a: old_msgs.get(a, [_NO_SIGNAL] * MAX_MSG_LEN)
+                                 for a in self.agent_ids}
 
         return self._get_states()
 

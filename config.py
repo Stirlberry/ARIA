@@ -46,7 +46,6 @@ WORLD_MODEL_WARMUP = 200    # real training steps before Dyna kicks in
 REWARD_CURRENCY = 10.0
 REWARD_COORD    = 30.0
 REWARD_STEP     = -0.1
-SIGNAL_REWARD   = 5.0
 SIGNAL_WINDOW   = 5
 INTRINSIC_BETA  = 1.0
 EPISODIC_BETA   = 0.5
@@ -54,9 +53,6 @@ EPISODIC_BETA   = 0.5
 # Rewards — new events (Phase 3)
 REWARD_REPRODUCE       =  20.0   # successful reproduction
 REWARD_DEATH           = -50.0   # agent dies (energy hits zero)
-REWARD_CHATTER_COORD   =   8.0   # chatter signal sent that precedes a CO collection
-REWARD_SHOUT_COORD     =   8.0   # shout signal sent that precedes a CO collection
-REWARD_SIGNAL_ACTED    =   5.0   # received a signal and moved toward a CO node
 
 # Cultural inheritance
 MEMORY_SIZE            = 150   # max high-value transitions per agent
@@ -119,11 +115,6 @@ FOG_RADIUS    = 5              # Chebyshev radius; nodes and agents beyond this 
 CHATTER_RANGE = 1              # adjacent only (Chebyshev distance ≤ 1)
 SHOUT_RANGE   = FOG_RADIUS - 2 # broadcast range = 3; less than fog so agents must close the gap
 
-# Contact coordination bonus (meet → talk → act together)
-CONTACT_WINDOW      = 40    # steps a collision+signal stays "fresh"
-CONTACT_COORD_BONUS = 20.0  # bonus on top of REWARD_COORD for teams that met and talked
-
-
 # Help system
 HELP_WINDOW        = 30
 HELP_REWARD_THRESH = 20.0
@@ -138,10 +129,6 @@ SHARED_REPLAY_SIZE = 80_000
 PER_ALPHA      = 0.6
 PER_BETA_START = 0.4
 PER_BETA_STEPS = 2_000_000
-
-# Potential-based reward shaping
-POTENTIAL_COORD_WEIGHT    = 3.0
-POTENTIAL_CURRENCY_WEIGHT = 1.0
 
 # Theory of Mind
 TOM_LR               = 1e-3
