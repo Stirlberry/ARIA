@@ -87,8 +87,8 @@ ENERGY_FROM_CURRENCY = 40    # energy gained from consuming a currency node
 ENERGY_FROM_CO       = 120   # energy gained per agent from consuming a CO node
 
 # Survival and reproduction (Phase 3)
-REPRODUCTION_THRESHOLD = 300  # both agents must be above this energy level to reproduce
-REPRODUCTION_COST      = 150  # energy deducted from each parent on reproduction
+REPRODUCTION_THRESHOLD = 400  # both agents must be above this energy level to reproduce
+REPRODUCTION_COST      = 200  # energy deducted from each parent on reproduction
 CO_HOLD_MAX_STEPS      = 50   # max steps an agent waits at a CO node for a partner
 SPAWN_PAUSE_STEPS      = 40   # steps parents freeze at birth point before separating
 
