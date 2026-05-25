@@ -476,7 +476,7 @@ def main():
                 print(f'  Generation reached  : {generation}')
                 print(f'  Full lineage        : {" > ".join(all_ids_ever)}')
                 print(f'  Total signals       : {channel.total_signals}')
-                print(f'  Lexicon assigned    : {channel.assigned_count()}/4')
+                print(f'  Lexicon assigned    : {channel.assigned_count()}/16')
                 print('=' * 64)
                 log_extinction(episode, generation, all_ids_ever, channel)
                 channel.flush_log()
@@ -501,7 +501,7 @@ def main():
                 print(f'  Ep {episode:5d} | gen {generation} | '
                       f'pop {len(agents)}/{MAX_POPULATION} α:{alpha_label} | '
                       f'eps {eps:.4f} | {r_str} | nrg [{e_str}] | '
-                      f'lex {assigned}/4 cmp {compound} seq {seqs} | '
+                      f'lex {assigned}/16 cmp {compound} seq {seqs} | '
                       f'roles [{roles}] | goals [{goals}] | '
                       f'api ${cost_tracker.session_cost:.4f}')
 
@@ -532,7 +532,7 @@ def main():
     print(f'  Generations reached : {generation}')
     print(f'  Full lineage        : {" > ".join(all_ids_ever)}')
     print(f'  Total signals       : {channel.total_signals}')
-    print(f'  Lexicon assigned    : {channel.assigned_count()}/4')
+    print(f'  Lexicon assigned    : {channel.assigned_count()}/16')
     print(f'  Compounds           : {channel.compound_lexicon.crystallised_count()}')
 
 
