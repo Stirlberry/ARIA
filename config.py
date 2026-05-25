@@ -90,7 +90,7 @@ ENERGY_FROM_CO       = 120   # energy gained per agent from consuming a CO node
 REPRODUCTION_THRESHOLD = 400  # both agents must be above this energy level to reproduce
 REPRODUCTION_COST      = 200  # energy deducted from each parent on reproduction
 CO_HOLD_MAX_STEPS      = 50   # max steps an agent waits at a CO node for a partner
-SPAWN_PAUSE_STEPS      = 40   # steps parents freeze at birth point before separating
+SPAWN_PAUSE_STEPS      = 60   # steps parents freeze at birth point before separating
 
 # Ghost nodes — Tier 2 knowledge preservation (Phase 3)
 GHOST_NODE_ACCESSES = 1       # times a ghost node can be accessed before it disappears
