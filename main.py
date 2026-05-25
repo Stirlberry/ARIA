@@ -47,7 +47,6 @@ from config import (
     AUTOSAVE_EVERY, ENV_DRIFT_INTERVAL,
     MAX_POPULATION,
     CONTACT_WINDOW, CONTACT_COORD_BONUS,
-    HANDSHAKE_WINDOW, HANDSHAKE_REWARD,
     ENERGY_MAX, REWARD_DEATH, REWARD_REPRODUCE,
     REPRODUCTION_THRESHOLD, REPRODUCTION_COST,
     REWARD_CHATTER_COORD, REWARD_SHOUT_COORD, REWARD_SIGNAL_ACTED,
@@ -410,20 +409,6 @@ def main():
                         if spawn_event is not None:
                             break
 
-                # ── Handshake reward: reply to a recent signal from adjacent agent ──
-                for agent_id, sig in signals_sent.items():
-                    if sig is not None:
-                        pos_a = positions[agent_id]
-                        for other_id in agent_list:
-                            if other_id == agent_id:
-                                continue
-                            steps_since = step - last_signal_step.get(
-                                other_id, -(HANDSHAKE_WINDOW + 1))
-                            if (0 < steps_since <= HANDSHAKE_WINDOW
-                                    and max(abs(positions[other_id][0] - pos_a[0]),
-                                            abs(positions[other_id][1] - pos_a[1])) <= 1):
-                                rewards[agent_id] += HANDSHAKE_REWARD
-                                break
 
                 for agent_id, agent in agents.items():
                     if agent_id in newly_dead:

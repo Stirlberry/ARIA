@@ -123,9 +123,6 @@ SHOUT_RANGE   = FOG_RADIUS - 2 # broadcast range = 3; less than fog so agents mu
 CONTACT_WINDOW      = 40    # steps a collision+signal stays "fresh"
 CONTACT_COORD_BONUS = 20.0  # bonus on top of REWARD_COORD for teams that met and talked
 
-# Handshake reward (two-way communication — reply to a recent signal)
-HANDSHAKE_WINDOW = 10   # steps within which a reply counts as a handshake
-HANDSHAKE_REWARD = 2.0  # bonus for sending a signal after receiving one from a nearby agent
 
 # Help system
 HELP_WINDOW        = 30
