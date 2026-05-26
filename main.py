@@ -121,7 +121,8 @@ def main():
                 print(f'  [Drift] Nodes relocated at episode {episode}')
 
             # ── Death phase: plateau triggers kill-weakest (needs ≥ 2 to compare) ──
-            if len(agents) > 1:
+            # if len(agents) > 1:                          # old: fired regardless of population size
+            if len(agents) >= MAX_POPULATION:
                 should_kill, kill_reason = plateau_mon.should_replicate(
                     agents, episode, last_replication_ep
                 )
