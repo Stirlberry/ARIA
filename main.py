@@ -81,7 +81,8 @@ def main():
 
     all_ids_ever        = list(INITIAL_AGENTS)
     generation          = 0
-    last_replication_ep = 0
+    last_replication_ep = 0   # tracks births — resets on every reproduction
+    last_plateau_ep     = 0   # tracks plateau retirements — separate clock
 
     print('=' * 64)
     print('  ARIA — Adaptive Reasoning and Interaction Agent')
@@ -124,15 +125,15 @@ def main():
             # if len(agents) > 1:                          # old: fired regardless of population size
             if len(agents) >= MAX_POPULATION:
                 should_kill, kill_reason = plateau_mon.should_replicate(
-                    agents, episode, last_replication_ep
+                    agents, episode, last_plateau_ep
                 )
                 if should_kill:
-                    print(f'\n  [Gen {generation}] Death at episode {episode} — {kill_reason}')
+                    print(f'\n  [Plateau] Retirement at episode {episode} — {kill_reason}')
                     retiring = min(agents.values(), key=lambda a: a.total_reward)
                     retire_pos     = env.agent_positions.get(retiring.agent_id)
                     retire_weights = retiring.online_net.state_dict()
                     agents, death_summary = kill_weakest(agents, episode)
-                    last_replication_ep = episode
+                    last_plateau_ep = episode
                     plateau_mon.deregister(death_summary['retired_id'])
                     if retire_pos:
                         env.add_ghost_node(retire_pos, retire_weights)
