@@ -7,8 +7,8 @@ GRID_H    = 24
 CELL_SIZE = 32
 
 # Nodes
-N_CURRENCY_NODES = 24
-N_COORD_NODES    = 12
+N_CURRENCY_NODES = 48
+N_COORD_NODES    = 24
 
 # Communication
 N_SIGNALS = 16
