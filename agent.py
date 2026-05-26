@@ -56,7 +56,7 @@ from config import (
 
 _N_ENERGY_BINS = 5   # critical / low / medium / high / full (bin 4 = above reproduction threshold)
 
-_INPUT_SIZE = (GRID_SIZE + GRID_SIZE              # x, y
+_INPUT_SIZE = (2                                  # x, y normalised floats (portable across grid sizes)
                + 9 + 9 + 9                        # currency_dir, coord_dir, partner_dir
                + 3 + 3 + 3                        # currency_dist, coord_dist, partner_dist
                + (N_SIGNALS + 1) * MAX_MSG_LEN    # received message (4 token slots)
@@ -307,8 +307,8 @@ def _encode(state, energy=ENERGY_START):
     sender_id_int = state[12] if len(state) > 12 else 0
     vec = np.zeros(_INPUT_SIZE, dtype=np.float32)
     off = 0
-    vec[off + x]      = 1.0; off += GRID_SIZE
-    vec[off + y]      = 1.0; off += GRID_SIZE
+    vec[off] = x / (GRID_SIZE - 1); off += 1
+    vec[off] = y / (GRID_SIZE - 1); off += 1
     vec[off + cd]     = 1.0; off += 9
     vec[off + kd]     = 1.0; off += 9
     vec[off + pd]     = 1.0; off += 9
