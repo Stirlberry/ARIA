@@ -46,11 +46,12 @@ class PlateauMonitor:
         h = self.history.get(agent_id, deque())
         if len(h) < PLATEAU_WINDOW:
             return False
-        half   = PLATEAU_WINDOW // 2
-        h_list = list(h)
-        older  = sum(h_list[:half]) / half
-        recent = sum(h_list[half:]) / half
-        return (recent - older) < PLATEAU_DELTA_THRESH
+        half     = PLATEAU_WINDOW // 2
+        h_list   = list(h)
+        older    = sum(h_list[:half]) / half
+        recent   = sum(h_list[half:]) / half
+        mean_abs = max(abs(sum(h_list) / len(h_list)), 1.0)
+        return (recent - older) < PLATEAU_DELTA_THRESH * mean_abs
 
     def should_replicate(self, agents, episode, last_replication_ep):
         """Returns (trigger: bool, reason: str)."""
@@ -206,6 +207,20 @@ def log_energy_death(agent, episode, step):
         'drain_rate':   round(float(agent.drain_rate), 3),
         'total_reward': round(float(agent.total_reward), 2),
         'episodes':     int(agent.episodes),
+    }
+    with open(LEXICON_LOG_PATH, 'a') as f:
+        f.write(json.dumps(record) + '\n')
+
+
+def log_ghost_absorption(agent_id, episode, step, total_reward, energy):
+    record = {
+        'event':        'ghost_absorbed',
+        'timestamp':    datetime.now().isoformat(),
+        'agent_id':     agent_id,
+        'episode':      episode,
+        'step':         step,
+        'total_reward': round(float(total_reward), 2),
+        'energy':       round(float(energy), 1),
     }
     with open(LEXICON_LOG_PATH, 'a') as f:
         f.write(json.dumps(record) + '\n')

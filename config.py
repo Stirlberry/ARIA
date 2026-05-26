@@ -97,7 +97,7 @@ GHOST_NODE_ACCESSES = 1       # times a ghost node can be accessed before it dis
 MUTATION_STD             = 0.02
 HYPERPARAM_MUTATION_STD  = 0.10
 PLATEAU_WINDOW           = 50
-PLATEAU_DELTA_THRESH     = 5.0
+PLATEAU_DELTA_THRESH     = 0.10   # fraction of agent's mean absolute reward (scaled)
 MIN_REPLICATION_INTERVAL = 500
 MAX_REPLICATION_INTERVAL = 1000
 

@@ -32,7 +32,7 @@ from agent import ARIAAgent, make_replay_buffer
 from communication import CommunicationChannel
 from genetics import (kill_weakest, energy_reproduce,
                       PlateauMonitor, get_alpha,
-                      log_energy_death, log_extinction)
+                      log_energy_death, log_ghost_absorption, log_extinction)
 from visualiser import Visualiser
 from config import (
     INITIAL_AGENTS, MAX_EPISODES, MAX_STEPS_PER_EPISODE,
@@ -247,6 +247,9 @@ def main():
                 for agent_id, ghost_data in info['ghost_collected']:
                     if agent_id in agents:
                         _absorb_ghost_weights(agents[agent_id], ghost_data)
+                        log_ghost_absorption(agent_id, episode, step,
+                                             agents[agent_id].total_reward,
+                                             agents[agent_id].energy)
                         print(f'  [Ghost] {agent_id} absorbed knowledge at '
                               f'ep {episode} step {step}')
 
@@ -311,14 +314,18 @@ def main():
                 # When coord fires, agents used move actions to arrive — no same-step signals.
                 # Credit pairs/sequences from within SIGNAL_WINDOW of the coord event.
                 if info['coord_achieved']:
-                    window_sigs = []
+                    signals_by_sender = {}
                     for aid in info['coord_agents']:
                         if signals_sent.get(aid) is None:  # didn't signal this step
                             sig_step = last_signal_step.get(aid, -(config.SIGNAL_WINDOW + 1))
                             if step - sig_step <= config.SIGNAL_WINDOW:
                                 sig_idx = last_signal_idx.get(aid)
                                 if sig_idx is not None:
-                                    window_sigs.append(sig_idx)
+                                    signals_by_sender[aid] = sig_idx
+                    window_sigs = list(signals_by_sender.values())
+                    channel.record_coord_event(episode, step,
+                                               list(info['coord_agents']),
+                                               signals_by_sender)
                     for i in range(len(window_sigs)):
                         for j in range(i + 1, len(window_sigs)):
                             channel.compound_lexicon.credit_coord_pair(
@@ -441,8 +448,16 @@ def main():
                       f'alpha:{alpha_label} | explore:{eps*100:.0f}%')
                 print(f'    energy   {e_vals}')
                 print(f'    reward   {r_vals}')
+                if channel.coord_pairs:
+                    top_pair  = max(channel.coord_pairs, key=channel.coord_pairs.get)
+                    top_count = channel.coord_pairs[top_pair]
+                    pair_str  = (f'{top_pair[0].split("-")[1]}'
+                                 f'↔{top_pair[1].split("-")[1]} ×{top_count}')
+                else:
+                    pair_str = 'none'
                 print(f'    lexicon {assigned}/16 | compounds {compound} | '
                       f'sequences {seqs} | roles {role_str} | goals {goal_str}')
+                print(f'    top coord pair  {pair_str}')
 
             # Autosave
             if episode % AUTOSAVE_EVERY == 0:

@@ -79,6 +79,7 @@ def save_checkpoint(episode, agents, channel, generation,
             'lexicon':          lexicon_data,
             'compound_lexicon': channel.compound_lexicon.to_list(),
             'sequence_lexicon': channel.sequence_lexicon.to_list(),
+            'coord_pairs':      {'|'.join(k): v for k, v in channel.coord_pairs.items()},
         },
         'plateau_history': plateau_history,
         'pt_file':         os.path.basename(pt_path),
@@ -227,6 +228,11 @@ def restore(meta, pt_path, shared_replay=None):
     sequence_data = meta['channel'].get('sequence_lexicon', [])
     if sequence_data:
         channel.sequence_lexicon = SequenceLexicon.from_list(sequence_data)
+
+    for raw_key, count in meta['channel'].get('coord_pairs', {}).items():
+        parts = raw_key.split('|')
+        if len(parts) == 2:
+            channel.coord_pairs[tuple(parts)] = count
 
     return (
         agents,

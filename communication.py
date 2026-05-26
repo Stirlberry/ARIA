@@ -252,6 +252,7 @@ class CommunicationChannel:
         self.sequence_lexicon = SequenceLexicon()
         self._symbol_pool     = list(SYMBOL_POOL)
         self.total_signals    = 0
+        self.coord_pairs      = {}   # tuple(sorted([a, b])) -> int count
         os.makedirs(os.path.dirname(LEXICON_LOG_PATH), exist_ok=True)
         # Open once for the session — avoids open/close overhead on every signal write
         mode = 'a' if append_log else 'w'
@@ -341,6 +342,24 @@ class CommunicationChannel:
     def get_display_symbol(self, signal_idx):
         entry = self.lexicon[signal_idx]
         return entry.symbol if entry.assigned else f'S{signal_idx}'
+
+    def record_coord_event(self, episode, step, agents_involved, signals_by_sender):
+        """Log a coordination event with sender-signal context for identity analysis."""
+        if len(agents_involved) >= 2:
+            key = tuple(sorted(agents_involved))
+            self.coord_pairs[key] = self.coord_pairs.get(key, 0) + 1
+            pair_count = self.coord_pairs[key]
+        else:
+            pair_count = 0
+        self._write({
+            'event':       'coord_event',
+            'timestamp':   self._ts(),
+            'episode':     episode,
+            'step':        step,
+            'agents':      agents_involved,
+            'signals':     signals_by_sender,
+            'pair_count':  pair_count,
+        })
 
     def get_lexicon_summary(self):
         return {i: entry.to_dict() for i, entry in self.lexicon.items()}
