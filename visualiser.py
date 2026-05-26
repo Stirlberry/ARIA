@@ -261,7 +261,7 @@ class Visualiser:
         self._agent_scroll = max(0, min(n_agents - n_vis, self._agent_scroll))
         list_top    = py
 
-        self.screen.set_clip(pygame.Rect(grid_px, list_top, PANEL_W, _LIST_H))
+        self.screen.set_clip(pygame.Rect(grid_px_w, list_top, PANEL_W, _LIST_H))
         for agent_id, agent in agent_items[self._agent_scroll: self._agent_scroll + n_vis]:
             col    = _agent_colour(agent_id)
             reward = ep_rewards.get(agent_id, 0.0)
