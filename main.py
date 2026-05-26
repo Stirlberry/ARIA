@@ -413,24 +413,36 @@ def main():
                 channel.flush_log()
                 return
 
-            # Console summary every 25 episodes
-            if episode % 25 == 0 and agents:
-                eps      = list(agents.values())[0].epsilon
-                assigned = channel.assigned_count()
-                compound = channel.compound_lexicon.crystallised_count()
-                seqs     = channel.sequence_lexicon.crystallised_count()
-                ids      = list(agents.keys())
-                r_str    = '  '.join(f'{a.split("-")[1]}:{ep_rewards.get(a,0):.1f}'
-                                      for a in ids)
-                roles    = '/'.join(agents[a].role[0] for a in ids)
-                goals    = '/'.join(agents[a].goal_label[:10] for a in ids)
+            # Console summary every 50 episodes
+            if episode % 50 == 0 and agents:
+                eps         = list(agents.values())[0].epsilon
+                assigned    = channel.assigned_count()
+                compound    = channel.compound_lexicon.crystallised_count()
+                seqs        = channel.sequence_lexicon.crystallised_count()
+                ids         = list(agents.keys())
                 alpha_label = get_alpha(agents).split('-')[1]
-                e_str = ' '.join(f'{a.split("-")[1]}:{agents[a].energy:.0f}' for a in ids)
+                short       = [a.split('-')[1] for a in ids]
+                e_vals      = '  '.join(f'{s}:{agents[a].energy:.0f}'
+                                        for s, a in zip(short, ids))
+                r_vals      = '  '.join(f'{s}:{ep_rewards.get(a, 0):+.0f}'
+                                        for s, a in zip(short, ids))
+                role_counts = {}
+                for a in ids:
+                    r = agents[a].role
+                    role_counts[r] = role_counts.get(r, 0) + 1
+                role_str = '  '.join(f'{r} x{c}' for r, c in role_counts.items())
+                goal_counts = {}
+                for a in ids:
+                    g = agents[a].goal_label or 'none'
+                    goal_counts[g] = goal_counts.get(g, 0) + 1
+                goal_str = '  '.join(f'{g} x{c}' for g, c in goal_counts.items())
                 print(f'  Ep {episode:5d} | gen {generation} | '
-                      f'pop {len(agents)}/{MAX_POPULATION} α:{alpha_label} | '
-                      f'eps {eps:.4f} | {r_str} | nrg [{e_str}] | '
-                      f'lex {assigned}/16 cmp {compound} seq {seqs} | '
-                      f'roles [{roles}] | goals [{goals}]')
+                      f'pop {len(agents)}/{MAX_POPULATION} | '
+                      f'alpha:{alpha_label} | explore:{eps*100:.0f}%')
+                print(f'    energy   {e_vals}')
+                print(f'    reward   {r_vals}')
+                print(f'    lexicon {assigned}/16 | compounds {compound} | '
+                      f'sequences {seqs} | roles {role_str} | goals {goal_str}')
 
             # Autosave
             if episode % AUTOSAVE_EVERY == 0:
