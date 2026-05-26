@@ -6,7 +6,7 @@ Renders every step at training speed (no FPS cap).
 import os
 import pygame
 from collections import deque
-from config import GRID_SIZE, CELL_SIZE, FOG_RADIUS, MAX_POPULATION, ENERGY_MAX
+from config import GRID_W, GRID_H, CELL_SIZE, FOG_RADIUS, MAX_POPULATION, ENERGY_MAX
 
 GRAPH_H = 150   # height of reward trend strip below the grid
 
@@ -52,9 +52,8 @@ class Visualiser:
     def __init__(self):
         pygame.init()
         self.cell    = CELL_SIZE
-        grid_px      = GRID_SIZE * self.cell
-        self.width   = grid_px + PANEL_W
-        self.height  = GRID_SIZE * self.cell
+        self.width   = GRID_W * self.cell + PANEL_W
+        self.height  = GRID_H * self.cell
         self.screen  = pygame.display.set_mode((self.width, self.height + GRAPH_H))
         self.reward_history = {}   # agent_id -> deque of episode rewards
         pygame.display.set_caption('ARIA — Adaptive Reasoning and Interaction Agent')
@@ -88,7 +87,7 @@ class Visualiser:
                     self._save_screenshot = True
             if event.type == pygame.MOUSEWHEEL:
                 mx, _ = pygame.mouse.get_pos()
-                if mx > GRID_SIZE * self.cell:   # cursor over side panel
+                if mx > GRID_W * self.cell:   # cursor over side panel
                     self._agent_scroll -= event.y  # wheel up → negative y → decrease index
 
     def _quit(self):
@@ -105,12 +104,13 @@ class Visualiser:
         self.replication_flash = 90
 
     def _draw_grid(self, env, agents, spawn_event=None):
-        grid_px = GRID_SIZE * self.cell
+        grid_px_w = GRID_W * self.cell
+        grid_px_h = GRID_H * self.cell
         currency_nodes, coord_nodes = env.get_nodes()
         positions = env.get_positions()
 
-        for x in range(GRID_SIZE):
-            for y in range(GRID_SIZE):
+        for x in range(GRID_W):
+            for y in range(GRID_H):
                 pygame.draw.rect(self.screen, GRID_CELL,
                                  pygame.Rect(x*self.cell, y*self.cell,
                                              self.cell-1, self.cell-1))
@@ -171,15 +171,16 @@ class Visualiser:
         if spawn_event is not None:
             self._draw_birth_ring(spawn_event)
 
-        for i in range(GRID_SIZE + 1):
+        for i in range(GRID_W + 1):
             pygame.draw.line(self.screen, GRID_LINE,
-                             (i*self.cell, 0), (i*self.cell, grid_px), 1)
+                             (i*self.cell, 0), (i*self.cell, grid_px_h), 1)
+        for i in range(GRID_H + 1):
             pygame.draw.line(self.screen, GRID_LINE,
-                             (0, i*self.cell), (grid_px, i*self.cell), 1)
+                             (0, i*self.cell), (grid_px_w, i*self.cell), 1)
 
         # Fog of war overlay — dark everywhere except within FOG_RADIUS of each agent
         # Magenta = colorkey (transparent hole); dark = fog
-        fog = pygame.Surface((grid_px, grid_px))
+        fog = pygame.Surface((grid_px_w, grid_px_h))
         fog.fill((8, 8, 16))
         fog.set_colorkey((255, 0, 255))
         fog.set_alpha(200)
@@ -212,13 +213,13 @@ class Visualiser:
 
     def _draw_panel(self, agents, channel, episode, step,
                     ep_rewards, generation):
-        grid_px = GRID_SIZE * self.cell
+        grid_px_w = GRID_W * self.cell
         pygame.draw.rect(self.screen, PANEL_BG,
-                         pygame.Rect(grid_px, 0, PANEL_W, self.height))
+                         pygame.Rect(grid_px_w, 0, PANEL_W, self.height))
         pygame.draw.line(self.screen, PANEL_LINE,
-                         (grid_px, 0), (grid_px, self.height), 2)
+                         (grid_px_w, 0), (grid_px_w, self.height), 2)
 
-        px = grid_px + 14
+        px = grid_px_w + 14
         py = 14
 
         def blit(s, col, size='md'):
@@ -350,8 +351,8 @@ class Visualiser:
             self.reward_history[agent_id].append(reward)
 
     def _draw_graph(self, agents, channel):
-        LINE_SECTION = 420                              # px allocated to line chart
-        BAR_SECTION  = GRID_SIZE * CELL_SIZE - LINE_SECTION  # ends at right-panel edge (348px → ~36px per bar at 8 slots)
+        LINE_SECTION = GRID_W * CELL_SIZE // 2         # divider sits at grid midpoint
+        BAR_SECTION  = GRID_W * CELL_SIZE - LINE_SECTION
         # lexicon takes the remainder (right panel width for 16 hex signal bars)
 
         gy = self.height + 22   # top of plot area

@@ -33,7 +33,7 @@ import torch.optim as optim
 from collections import deque
 
 from config import (
-    GRID_SIZE, N_SIGNALS, MAX_MSG_LEN, SENDER_ID_MAX,
+    GRID_W, GRID_H, N_SIGNALS, MAX_MSG_LEN, SENDER_ID_MAX,
     LEARNING_RATE, DISCOUNT_FACTOR,
     EPSILON_START, EPSILON_END, EPSILON_DECAY,
     HIDDEN_SIZE, N_LAYERS_DEFAULT,
@@ -307,8 +307,8 @@ def _encode(state, energy=ENERGY_START):
     sender_id_int = state[12] if len(state) > 12 else 0
     vec = np.zeros(_INPUT_SIZE, dtype=np.float32)
     off = 0
-    vec[off] = x / (GRID_SIZE - 1); off += 1
-    vec[off] = y / (GRID_SIZE - 1); off += 1
+    vec[off] = x / (GRID_W - 1); off += 1
+    vec[off] = y / (GRID_H - 1); off += 1
     vec[off + cd]     = 1.0; off += 9
     vec[off + kd]     = 1.0; off += 9
     vec[off + pd]     = 1.0; off += 9

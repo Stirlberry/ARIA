@@ -23,7 +23,7 @@ Energy:
 import random
 import numpy as np
 from config import (
-    GRID_SIZE, N_CURRENCY_NODES, N_COORD_NODES,
+    GRID_W, GRID_H, N_CURRENCY_NODES, N_COORD_NODES,
     REWARD_CURRENCY, REWARD_COORD, REWARD_STEP, N_SIGNALS,
     MAX_MSG_LEN, MIN_COORD_AGENTS, ENV_DRIFT_N_NODES,
     CURRENCY_NODE_CAPACITY, REGEN_MIN_STEPS, REGEN_MAX_STEPS, FOG_RADIUS,
@@ -36,7 +36,8 @@ _NO_SIGNAL = N_SIGNALS   # sentinel: empty message slot
 
 class Environment:
     def __init__(self, agent_ids):
-        self.grid_size       = GRID_SIZE
+        self.grid_w          = GRID_W
+        self.grid_h          = GRID_H
         self.agent_ids       = list(agent_ids)
         self.currency_nodes  = set()   # active (stocked) nodes
         self.coord_nodes     = set()
@@ -85,8 +86,8 @@ class Environment:
             for a in self.agent_ids:
                 if a not in self.agent_positions:
                     for _ in range(200):
-                        pos = (random.randint(0, self.grid_size - 1),
-                               random.randint(0, self.grid_size - 1))
+                        pos = (random.randint(0, self.grid_w - 1),
+                               random.randint(0, self.grid_h - 1))
                         if pos not in occupied:
                             self.agent_positions[a] = pos
                             occupied.add(pos)
@@ -103,16 +104,16 @@ class Environment:
         occupied = set()
         for agent_id in self.agent_ids:
             while True:
-                pos = (random.randint(0, self.grid_size - 1),
-                       random.randint(0, self.grid_size - 1))
+                pos = (random.randint(0, self.grid_w - 1),
+                       random.randint(0, self.grid_h - 1))
                 if pos not in occupied:
                     self.agent_positions[agent_id] = pos
                     occupied.add(pos)
                     break
         for _ in range(N_CURRENCY_NODES):
             while True:
-                pos = (random.randint(0, self.grid_size - 1),
-                       random.randint(0, self.grid_size - 1))
+                pos = (random.randint(0, self.grid_w - 1),
+                       random.randint(0, self.grid_h - 1))
                 if pos not in occupied:
                     self.currency_nodes.add(pos)
                     self._node_stock[pos] = CURRENCY_NODE_CAPACITY
@@ -120,8 +121,8 @@ class Environment:
                     break
         for _ in range(N_COORD_NODES):
             while True:
-                pos = (random.randint(0, self.grid_size - 1),
-                       random.randint(0, self.grid_size - 1))
+                pos = (random.randint(0, self.grid_w - 1),
+                       random.randint(0, self.grid_h - 1))
                 if pos not in occupied:
                     self.coord_nodes.add(pos)
                     occupied.add(pos)
@@ -172,8 +173,8 @@ class Environment:
         occupied = (set(self.agent_positions.values()) |
                     self.currency_nodes | self.coord_nodes)
         for _ in range(200):
-            pos = (random.randint(0, self.grid_size - 1),
-                   random.randint(0, self.grid_size - 1))
+            pos = (random.randint(0, self.grid_w - 1),
+                   random.randint(0, self.grid_h - 1))
             if pos not in occupied:
                 if node_type == 'currency':
                     self.currency_nodes.add(pos)
@@ -283,8 +284,8 @@ class Environment:
             pos = self.agent_positions[agent_id]
             if action < 8:
                 dx, dy = deltas[action]
-                nx = max(0, min(self.grid_size - 1, pos[0] + dx))
-                ny = max(0, min(self.grid_size - 1, pos[1] + dy))
+                nx = max(0, min(self.grid_w - 1, pos[0] + dx))
+                ny = max(0, min(self.grid_h - 1, pos[1] + dy))
                 new_positions[agent_id] = (nx, ny)
             else:
                 new_positions[agent_id] = pos
@@ -375,8 +376,8 @@ class Environment:
             self._node_stock.pop(old_pos, None)
 
             for _ in range(200):
-                new_pos = (random.randint(0, self.grid_size - 1),
-                           random.randint(0, self.grid_size - 1))
+                new_pos = (random.randint(0, self.grid_w - 1),
+                           random.randint(0, self.grid_h - 1))
                 if (new_pos not in occupied
                         and new_pos not in self.currency_nodes
                         and new_pos not in self.coord_nodes):
