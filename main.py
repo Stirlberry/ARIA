@@ -27,14 +27,12 @@ import random
 import torch
 import config
 import save_system
-from budget import cost_tracker
 from environment import Environment
 from agent import ARIAAgent, make_replay_buffer
 from communication import CommunicationChannel
 from genetics import (kill_weakest, energy_reproduce,
                       PlateauMonitor, get_alpha,
                       log_energy_death, log_extinction)
-from help_system import HelpMonitor, LexiconAdvisor
 from visualiser import Visualiser
 from config import (
     INITIAL_AGENTS, MAX_EPISODES, MAX_STEPS_PER_EPISODE,
@@ -75,13 +73,10 @@ def main():
     agents         = {a: ARIAAgent(a, replay=shared_replay) for a in INITIAL_AGENTS}
     env            = Environment(list(agents.keys()))
     channel        = CommunicationChannel()
-    vis            = Visualiser()
-    help_mon       = HelpMonitor()
-    plateau_mon    = PlateauMonitor()
-    lexicon_advisor = LexiconAdvisor()
+    vis         = Visualiser()
+    plateau_mon = PlateauMonitor()
 
     for agent_id in agents:
-        help_mon.register_agent(agent_id)
         plateau_mon.register(agent_id)
 
     all_ids_ever        = list(INITIAL_AGENTS)
@@ -95,36 +90,16 @@ def main():
     print(f'  Founders        : {" + ".join(INITIAL_AGENTS)}')
     print(f'  Replication     : self-directed  '
           f'(min {MIN_REPLICATION_INTERVAL} eps / max {MAX_REPLICATION_INTERVAL} eps)')
-    print(f'  Help system     : active from episode {config.HELP_MIN_EPISODE}')
     print(f'  Env drift       : every {ENV_DRIFT_INTERVAL} episodes')
     print(f'  Lexicon         : {LEXICON_LOG_PATH}')
     print(f'  ESC to quit')
-    print(f'  API budget     : cap ${config.API_BUDGET_CAP:.2f}/session  |  {cost_tracker.lifetime_str()}')
     print('=' * 64)
-
-    # Lexicon Advisor toggle
-    try:
-        la = input('  Lexicon Advisor on? [Y/n]: ').strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        la = 'y'
-    config.LEXICON_ADVISOR_ON = la not in ('n', 'no')
-    print(f'  Lexicon Advisor : {"ON" if config.LEXICON_ADVISOR_ON else "OFF"}')
-
-    # Help system toggle
-    try:
-        hs = input('  Help system on?     [Y/n]: ').strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        hs = 'y'
-    config.HELP_SYSTEM_ON = hs not in ('n', 'no')
-    print(f'  Help system     : {"ON" if config.HELP_SYSTEM_ON else "OFF"}\n')
 
     start_episode = 1
     meta, pt_path = save_system.prompt_resume()
     if meta is not None:
         (agents, channel, generation, last_replication_ep,
          all_ids_ever, plateau_history, start_episode) = save_system.restore(meta, pt_path, shared_replay)
-        for agent_id in agents:
-            help_mon.register_agent(agent_id)
         for agent_id, history in plateau_history.items():
             plateau_mon.register(agent_id)
             for r in history:
@@ -155,19 +130,10 @@ def main():
                     agents, death_summary = kill_weakest(agents, episode)
                     last_replication_ep = episode
                     plateau_mon.deregister(death_summary['retired_id'])
-                    help_mon.deregister_agent(death_summary['retired_id'])
                     env.reset(agent_ids=list(agents.keys()), soft=True)
                     print(f'  Died    : {death_summary["retired_id"]} '
                           f'(reward {death_summary["retired_total_reward"]:.1f})')
                     print(f'  Survivors: {", ".join(agents)}\n')
-
-            # Help system check
-            if config.HELP_SYSTEM_ON:
-                struggling = help_mon.check_all(agents, episode)
-                for agent_id, reason in struggling:
-                    agent = agents[agent_id]
-                    print(f'\n  [Help] {agent_id} struggling ({reason}) at episode {episode}')
-                    help_mon.run_help_cycle(agent_id, agent, reason, episode, config)
 
             # Episode setup
             states             = env.reset(agent_ids=list(agents.keys()), soft=True)
@@ -222,7 +188,6 @@ def main():
                             all_ids_ever.append(child_id)
                             generation         += 1
                             last_replication_ep = episode
-                            help_mon.register_agent(child_id)
                             plateau_mon.register(child_id)
                             env.add_newborn(child_id, spawn_event['spawn_point'])
                             last_signal_step[child_id]  = -(config.SIGNAL_WINDOW + 1)
@@ -251,7 +216,8 @@ def main():
                         last_signal_idx[agent_id]  = sig
 
                 next_states, rewards, done, info, signals_received = env.step(
-                    actions, signals_sent
+                    actions, signals_sent,
+                    agent_energies={a: agents[a].energy for a in agents}
                 )
 
                 # Clear spawn-pause parents' message buffers to suppress phantom signals
@@ -422,7 +388,6 @@ def main():
                 agent.end_episode()
                 partner_ids = [aid for aid in agents if aid != agent_id]
                 agent.update_reputation(partner_ids, ep_coord_any)
-                help_mon.record_episode(agent_id, ep_rewards[agent_id], ep_coord_any)
                 plateau_mon.record(agent_id, ep_rewards[agent_id])
 
             vis.record_episode(ep_rewards)
@@ -439,9 +404,6 @@ def main():
                 log_extinction(episode, generation, all_ids_ever, channel)
                 channel.flush_log()
                 return
-
-            # Proactive lexicon analysis every 100 episodes
-            lexicon_advisor.maybe_advise(channel, agents, episode, config)
 
             # Console summary every 25 episodes
             if episode % 25 == 0 and agents:
@@ -460,8 +422,7 @@ def main():
                       f'pop {len(agents)}/{MAX_POPULATION} α:{alpha_label} | '
                       f'eps {eps:.4f} | {r_str} | nrg [{e_str}] | '
                       f'lex {assigned}/16 cmp {compound} seq {seqs} | '
-                      f'roles [{roles}] | goals [{goals}] | '
-                      f'api ${cost_tracker.session_cost:.4f}')
+                      f'roles [{roles}] | goals [{goals}]')
 
             # Autosave
             if episode % AUTOSAVE_EVERY == 0:

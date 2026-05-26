@@ -6,8 +6,8 @@ GRID_SIZE = 24
 CELL_SIZE = 32
 
 # Nodes
-N_CURRENCY_NODES = 35
-N_COORD_NODES    = 6
+N_CURRENCY_NODES = 16
+N_COORD_NODES    = 12
 
 # Communication
 N_SIGNALS = 16
@@ -43,6 +43,7 @@ WORLD_MODEL_HIDDEN = 128
 WORLD_MODEL_WARMUP = 200    # real training steps before Dyna kicks in
 
 # Rewards
+
 REWARD_CURRENCY = 10.0
 REWARD_COORD    = 30.0
 REWARD_STEP     = -0.1
@@ -51,7 +52,7 @@ INTRINSIC_BETA  = 1.0
 EPISODIC_BETA   = 0.5
 
 # Rewards — new events (Phase 3)
-REWARD_REPRODUCE       =  20.0   # successful reproduction
+REWARD_REPRODUCE       =  10.0   # successful reproduction
 REWARD_DEATH           = -50.0   # agent dies (energy hits zero)
 
 # Cultural inheritance
@@ -69,23 +70,23 @@ AUTOSAVE_EVERY        = 50
 
 # Population
 INITIAL_AGENTS   = ['ARIA-CAFE', 'ARIA-BABE', 'ARIA-DEAD', 'ARIA-BEEF']
-MAX_POPULATION       = 8    # population ceiling
+MAX_POPULATION       = 10   # population ceiling
 MIN_COORD_AGENTS     = 2    # any 2 agents on a CO node triggers coordination
 
 # Energy system (Phase 3)
-ENERGY_START         = 500   # starting energy for all new agents
-ENERGY_MAX           = 500   # maximum energy cap — agents cannot exceed this
-ENERGY_NEWBORN       = 200   # starting energy for agents born via reproduction
+ENERGY_START         = 300   # starting energy for all new agents
+ENERGY_MAX           = 600   # maximum energy cap — agents cannot exceed this
+ENERGY_NEWBORN       = 300   # starting energy for agents born via reproduction
 ENERGY_DRAIN_LOW     = 0.3   # passive energy drain per step (low drain rate)
 ENERGY_DRAIN_MED     = 0.5   # passive energy drain per step (medium drain rate)
 ENERGY_DRAIN_HIGH    = 0.7   # passive energy drain per step (high drain rate)
-ENERGY_FROM_CURRENCY = 40    # energy gained from consuming a currency node
-ENERGY_FROM_CO       = 120   # energy gained per agent from consuming a CO node
+ENERGY_FROM_CURRENCY = 50    # energy gained from consuming a currency node
+ENERGY_FROM_CO       = 150   # energy gained per agent from consuming a CO node
 
 # Survival and reproduction (Phase 3)
-REPRODUCTION_THRESHOLD = 400  # both agents must be above this energy level to reproduce
+REPRODUCTION_THRESHOLD = 500  # both agents must be above this energy level to reproduce
 REPRODUCTION_COST      = 200  # energy deducted from each parent on reproduction
-CO_HOLD_MAX_STEPS      = 50   # max steps an agent waits at a CO node for a partner
+
 SPAWN_PAUSE_STEPS      = 60   # steps parents freeze at birth point before separating
 
 # Ghost nodes — Tier 2 knowledge preservation (Phase 3)
@@ -113,14 +114,7 @@ FOG_RADIUS    = 5              # Chebyshev radius; nodes and agents beyond this 
 
 # Communication ranges (Phase 3)
 CHATTER_RANGE = 1              # adjacent only (Chebyshev distance ≤ 1)
-SHOUT_RANGE   = FOG_RADIUS - 2 # broadcast range = 3; less than fog so agents must close the gap
-
-# Help system
-HELP_WINDOW        = 30
-HELP_REWARD_THRESH = 20.0
-HELP_COORD_THRESH  = 0.05
-HELP_MIN_EPISODE   = 150
-HELP_COOLDOWN      = 50
+SHOUT_RANGE   = FOG_RADIUS - 1 # broadcast range = 4; less than fog so agents must close the gap
 
 # Shared replay buffer
 SHARED_REPLAY_SIZE = 80_000
@@ -142,17 +136,8 @@ GOAL_DISCOVERY_CRYSTALLISE_EVERY = 50    # episodes between discovery attempts
 GOAL_DISCOVERY_MIN_LIFT          = 0.3   # min avg-reward lift over baseline
 GOAL_DISCOVERY_BONUS             = 0.3   # fixed bonus for self-discovered goals
 
-# API Budget
-LEXICON_ADVISOR_ON = True   # set False to disable the Lexicon Advisor entirely
-HELP_SYSTEM_ON     = True   # set False to disable the Claude help system entirely
-API_BUDGET_CAP    = 1.00   # USD per session; Claude calls stop if exceeded
-HAIKU_INPUT_COST  = 0.80   # USD per million input tokens  (claude-haiku-4-5)
-HAIKU_OUTPUT_COST = 4.00   # USD per million output tokens (claude-haiku-4-5)
-BUDGET_LOG_PATH   = 'logs/budget.json'
-
 # Logging
-LEXICON_LOG_PATH       = 'logs/lexicon.jsonl'
-RETIRED_LOG_PATH       = 'logs/retired'
-HELP_LOG_PATH          = 'logs/help.jsonl'
-SUBGOAL_LOG_PATH       = 'logs/subgoals.jsonl'
+LEXICON_LOG_PATH        = 'logs/lexicon.jsonl'
+RETIRED_LOG_PATH        = 'logs/retired'
+SUBGOAL_LOG_PATH        = 'logs/subgoals.jsonl'
 GOAL_DISCOVERY_LOG_PATH = 'logs/discovered_goals.jsonl'

@@ -18,10 +18,6 @@ Energy:
   CO nodes yield ENERGY_FROM_CO per participating agent (returned in info).
   Ghost nodes (dead agent knowledge) yield one absorption event then disappear.
 
-CO hold:
-  An agent waiting alone on a CO node accumulates hold steps. When it exceeds
-  CO_HOLD_MAX_STEPS the environment reports a timeout in info so the caller
-  can apply a nudge; the node itself is unaffected.
 """
 
 import random
@@ -32,7 +28,7 @@ from config import (
     MAX_MSG_LEN, MIN_COORD_AGENTS, ENV_DRIFT_N_NODES,
     CURRENCY_NODE_CAPACITY, REGEN_MIN_STEPS, REGEN_MAX_STEPS, FOG_RADIUS,
     ENERGY_FROM_CURRENCY, ENERGY_FROM_CO,
-    GHOST_NODE_ACCESSES, CHATTER_RANGE, SHOUT_RANGE, CO_HOLD_MAX_STEPS,
+    GHOST_NODE_ACCESSES, CHATTER_RANGE, SHOUT_RANGE, ENERGY_MAX,
 )
 
 _NO_SIGNAL = N_SIGNALS   # sentinel: empty message slot
@@ -52,7 +48,7 @@ class Environment:
         self._node_stock      = {}   # pos -> remaining stock (active nodes only)
         self._pending_spawns  = []   # list of [steps_remaining, node_type]
         self.ghost_nodes      = {}   # pos -> {'data': any, 'accesses': int}
-        self._co_hold_steps   = {}   # agent_id -> steps spent waiting alone on a CO node
+
 
         self.reset()
 
@@ -74,7 +70,7 @@ class Environment:
             self._node_stock     = {}
             self._pending_spawns = []
             self.ghost_nodes     = {}
-            self._co_hold_steps  = {}
+
             self._msg_buffers    = {a: [] for a in self.agent_ids}
             self._last_msgs      = {a: [_NO_SIGNAL] * MAX_MSG_LEN for a in self.agent_ids}
             self._place_entities()
@@ -82,8 +78,6 @@ class Environment:
             self.steps = 0
             # Remove agents that have left the population
             self.agent_positions = {a: p for a, p in self.agent_positions.items()
-                                    if a in self.agent_ids}
-            self._co_hold_steps  = {a: v for a, v in self._co_hold_steps.items()
                                     if a in self.agent_ids}
             # Place any new agents (newborns) at a random empty cell
             occupied = (set(self.agent_positions.values()) |
@@ -241,10 +235,11 @@ class Environment:
 
     # ── Step ───────────────────────────────────────────────────────────────────
 
-    def step(self, actions, signals_sent):
+    def step(self, actions, signals_sent, agent_energies=None):
         """
-        actions:      dict agent_id -> int (0-7 move, 8+ signal)
-        signals_sent: dict agent_id -> int signal index or None
+        actions:        dict agent_id -> int (0-7 move, 8+ signal)
+        signals_sent:   dict agent_id -> int signal index or None
+        agent_energies: dict agent_id -> float current energy (optional)
         Returns: next_states, rewards, done, info, signals_sent
         """
         self.steps += 1
@@ -253,7 +248,7 @@ class Environment:
                    'messages_sent': {}, 'coord_agents': [],
                    'energy_gains': {},        # agent_id -> energy gained this step
                    'ghost_collected': [],     # list of (agent_id, ghost_data)
-                   'co_hold_timeout': []}
+}
 
         deltas = [(0, -1), (0, 1), (1, 0), (-1, 0),    # N S E W
                   (1, -1), (-1, -1), (1, 1), (-1, 1)]  # NE NW SE SW
@@ -300,7 +295,8 @@ class Environment:
             pos = self.agent_positions[agent_id]
             if pos in self.currency_nodes:
                 stock = self._node_stock.get(pos, 0)
-                if stock > 0:
+                energy = agent_energies.get(agent_id, 0) if agent_energies else 0
+                if stock > 0 and energy < ENERGY_MAX:
                     self._node_stock[pos] = stock - 1
                     rewards[agent_id] += REWARD_CURRENCY
                     info['currency_collected'].append(agent_id)
@@ -311,36 +307,24 @@ class Environment:
                         del self._node_stock[pos]
                         self._queue_spawn('currency')
 
-        # ── CO node collection (requires MIN_COORD_AGENTS) ─────────────────────
+        # ── CO node collection (1 agent on node + 1 agent adjacent) ──────────────
         for coord_pos in list(self.coord_nodes):
-            near = [a for a in self.agent_ids
-                    if self.agent_positions[a] == coord_pos]
-            if len(near) >= MIN_COORD_AGENTS:
+            on_node = [a for a in self.agent_ids
+                       if self.agent_positions[a] == coord_pos]
+            adjacent = [a for a in self.agent_ids
+                        if a not in on_node and
+                        max(abs(self.agent_positions[a][0] - coord_pos[0]),
+                            abs(self.agent_positions[a][1] - coord_pos[1])) == 1]
+            if on_node and adjacent:
+                participants = on_node + adjacent
                 self.coord_nodes.discard(coord_pos)
-                for a in near:
+                for a in participants:
                     rewards[a] += REWARD_COORD
                     info['energy_gains'][a] = (
                         info['energy_gains'].get(a, 0) + ENERGY_FROM_CO)
                 info['coord_achieved'] = True
-                info['coord_agents'].extend(near)
+                info['coord_agents'].extend(participants)
                 self._queue_spawn('coord')
-            elif len(near) == 1:
-                # One agent waiting alone — track hold steps
-                a = near[0]
-                self._co_hold_steps[a] = self._co_hold_steps.get(a, 0) + 1
-                if self._co_hold_steps[a] >= CO_HOLD_MAX_STEPS:
-                    info['co_hold_timeout'].append(a)
-                    self._co_hold_steps[a] = 0   # reset so timeout fires once per window
-            else:
-                # No agent on this CO node — clear any stale hold counters for it
-                pass
-
-        # Reset hold counter for agents that left a CO node
-        on_co = {a for coord_pos in self.coord_nodes
-                 for a in self.agent_ids if self.agent_positions[a] == coord_pos}
-        for a in list(self._co_hold_steps):
-            if a not in on_co:
-                self._co_hold_steps.pop(a, None)
 
         # ── Ghost node collection (one access, then gone) ──────────────────────
         for agent_id in self.agent_ids:
@@ -408,7 +392,7 @@ class Environment:
         self.agent_positions[agent_id] = position
         self._msg_buffers[agent_id]    = []
         self._last_msgs[agent_id]      = [_NO_SIGNAL] * MAX_MSG_LEN
-        self._co_hold_steps.setdefault(agent_id, 0)
+
 
     def clear_msg_buffer(self, agent_id):
         """Clear an agent's outgoing message buffer to suppress spawn-pause phantom signals."""

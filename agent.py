@@ -526,6 +526,11 @@ class SubGoal:
 
 # ── Agent ──────────────────────────────────────────────────────────────────────
 
+def _home_signal(agent_id):
+    """Deterministically map an agent ID to a unique signal index 0–(N_SIGNALS-1)."""
+    return int(agent_id.split('-')[-1], 16) % N_SIGNALS
+
+
 class ARIAAgent:
     def __init__(self, agent_id,
                  learning_rate=None, epsilon_decay=None,
@@ -567,6 +572,11 @@ class ARIAAgent:
                 self.online_net.load_state_dict(online_state_dict)
             except Exception:
                 pass
+        else:
+            # Nudge output bias toward agent's unique home signal so identity can emerge
+            home_signal = _home_signal(agent_id)
+            with torch.no_grad():
+                self.online_net.output.bias[8 + home_signal] += 0.5
         self.target_net.load_state_dict(self.online_net.state_dict())
         self.target_net.eval()
         self.optimizer = optim.Adam(self.online_net.parameters(), lr=self.learning_rate)

@@ -60,7 +60,7 @@ class Visualiser:
         pygame.display.set_caption('ARIA — Adaptive Reasoning and Interaction Agent')
         self.font_lg = pygame.font.SysFont('monospace', 17, bold=True)
         self.font_md = pygame.font.SysFont('monospace', 13)
-        self.font_sm = pygame.font.SysFont('monospace', 11)
+        self.font_sm = pygame.font.SysFont('monospace', 9)
         self.signal_history      = []
         self.replication_flash   = 0
         self.last_replication    = None
@@ -116,24 +116,24 @@ class Visualiser:
                                              self.cell-1, self.cell-1))
 
         for (cx, cy) in currency_nodes:
-            pad = 10
+            pad = 8
             pygame.draw.rect(self.screen, CURRENCY_COL,
                              pygame.Rect(cx*self.cell+pad, cy*self.cell+pad,
                                          self.cell-pad*2, self.cell-pad*2),
                              border_radius=3)
             t = self.font_sm.render('$', True, BG)
-            self.screen.blit(t, (cx*self.cell+self.cell//2-4,
-                                  cy*self.cell+self.cell//2-6))
+            self.screen.blit(t, (cx*self.cell+self.cell//2 - t.get_width()//2,
+                                  cy*self.cell+self.cell//2 - t.get_height()//2))
 
         for (cx, cy) in coord_nodes:
-            pad = 10
+            pad = 8
             pygame.draw.rect(self.screen, COORD_COL,
                              pygame.Rect(cx*self.cell+pad, cy*self.cell+pad,
                                          self.cell-pad*2, self.cell-pad*2),
                              border_radius=3)
             t = self.font_sm.render('CO', True, BG)
-            self.screen.blit(t, (cx*self.cell+self.cell//2-8,
-                                  cy*self.cell+self.cell//2-6))
+            self.screen.blit(t, (cx*self.cell+self.cell//2 - t.get_width()//2,
+                                  cy*self.cell+self.cell//2 - t.get_height()//2))
 
         for (gx, gy) in env.ghost_nodes.keys():
             cx = gx * self.cell + self.cell // 2
@@ -150,7 +150,7 @@ class Visualiser:
             cy  = ay*self.cell + self.cell//2
             pygame.draw.circle(self.screen, col, (cx, cy), self.cell//2 - 5)
             lbl = self.font_sm.render(tag, True, BG)
-            self.screen.blit(lbl, (cx - len(tag)*3, cy - 6))
+            self.screen.blit(lbl, (cx - lbl.get_width()//2, cy - lbl.get_height()//2))
 
             if agent_id in agents:
                 energy   = agents[agent_id].energy
@@ -276,13 +276,16 @@ class Visualiser:
         self.screen.set_clip(None)
 
         if n_agents > _VISIBLE:
-            sb_x  = self.width - 7
+            # sb_x  = self.width - 7  # original scrollbar position and width (4px)
+            sb_x  = self.width - 5
             th_h  = max(20, _LIST_H * _VISIBLE // n_agents)
             th_y  = list_top + (_LIST_H - th_h) * self._agent_scroll // max(1, n_agents - _VISIBLE)
+            # pygame.draw.rect(self.screen, PANEL_LINE, pygame.Rect(sb_x, list_top, 4, _LIST_H))
+            # pygame.draw.rect(self.screen, MUTED, pygame.Rect(sb_x, th_y, 4, th_h))
             pygame.draw.rect(self.screen, PANEL_LINE,
-                             pygame.Rect(sb_x, list_top, 4, _LIST_H))
+                             pygame.Rect(sb_x, list_top, 2, _LIST_H))
             pygame.draw.rect(self.screen, MUTED,
-                             pygame.Rect(sb_x, th_y, 4, th_h))
+                             pygame.Rect(sb_x, th_y, 2, th_h))
 
         py = list_top + _LIST_H
 
@@ -441,7 +444,9 @@ class Visualiser:
 
         agent_list    = list(agents.items())
         n_agents      = len(agent_list)
-        n_bars        = MAX_POPULATION  # always 8 slots — constant width regardless of population
+        # n_bars        = MAX_POPULATION  # always 8 slots — constant width regardless of population
+        # n_bars        = len(agents)  # original: scales with actual population
+        n_bars        = MAX_POPULATION  # fixed 10 slots regardless of population
         total_rewards = [max(0.0, ag.total_reward) for _, ag in agent_list]
         max_total     = max(max(total_rewards), 1.0)
 
