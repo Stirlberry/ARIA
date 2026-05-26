@@ -127,12 +127,18 @@ def main():
                 )
                 if should_kill:
                     print(f'\n  [Gen {generation}] Death at episode {episode} — {kill_reason}')
+                    retiring = min(agents.values(), key=lambda a: a.total_reward)
+                    retire_pos     = env.agent_positions.get(retiring.agent_id)
+                    retire_weights = retiring.online_net.state_dict()
                     agents, death_summary = kill_weakest(agents, episode)
                     last_replication_ep = episode
                     plateau_mon.deregister(death_summary['retired_id'])
+                    if retire_pos:
+                        env.add_ghost_node(retire_pos, retire_weights)
                     env.reset(agent_ids=list(agents.keys()), soft=True)
                     print(f'  Died    : {death_summary["retired_id"]} '
-                          f'(reward {death_summary["retired_total_reward"]:.1f})')
+                          f'(reward {death_summary["retired_total_reward"]:.1f})'
+                          f'{f"  ghost at {retire_pos}" if retire_pos else ""}')
                     print(f'  Survivors: {", ".join(agents)}\n')
 
             # Episode setup
