@@ -2,8 +2,8 @@
 # Phase 3 Configuration
 
 # Grid
-GRID_W    = 24
-GRID_H    = 16
+GRID_W    = 32
+GRID_H    = 24
 CELL_SIZE = 32
 
 # Nodes
