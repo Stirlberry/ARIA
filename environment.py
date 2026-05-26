@@ -227,8 +227,18 @@ class Environment:
         received = tuple(self._last_msgs[source]) if source and source in self._last_msgs \
                    else (_NO_SIGNAL,) * MAX_MSG_LEN
 
+        # Option 2: sender identity channel — who just spoke?
+        # 0 = no sender; otherwise the hex portion of the agent ID as an int.
+        if source is not None:
+            try:
+                sender_id_int = int(source.split('-')[1], 16)
+            except (IndexError, ValueError):
+                sender_id_int = 0
+        else:
+            sender_id_int = 0
+
         return (pos[0], pos[1], currency_dir, coord_dir, partner_dir,
-                currency_dist, coord_dist, partner_dist) + received
+                currency_dist, coord_dist, partner_dist) + received + (sender_id_int,)
 
     def _get_states(self):
         return {a: self._get_state(a) for a in self.agent_ids}

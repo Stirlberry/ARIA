@@ -12,6 +12,7 @@ N_COORD_NODES    = 12
 # Communication
 N_SIGNALS = 16
 MAX_MSG_LEN = 4            # max tokens per variable-length message
+SENDER_ID_MAX = 0xFFFF     # normalisation ceiling for sender identity channel (Option 2)
 UNASSIGNED_SYMBOL = '[?]'
 LEXICON_STABILITY_THRESHOLD = 12   # coordination successes required to crystallise a signal
 COMPOUND_THRESHOLD  = 8    # coordinated successes before a signal pair crystallises

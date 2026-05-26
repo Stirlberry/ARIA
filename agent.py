@@ -33,7 +33,7 @@ import torch.optim as optim
 from collections import deque
 
 from config import (
-    GRID_SIZE, N_SIGNALS, MAX_MSG_LEN,
+    GRID_SIZE, N_SIGNALS, MAX_MSG_LEN, SENDER_ID_MAX,
     LEARNING_RATE, DISCOUNT_FACTOR,
     EPSILON_START, EPSILON_END, EPSILON_DECAY,
     HIDDEN_SIZE, N_LAYERS_DEFAULT,
@@ -60,7 +60,8 @@ _INPUT_SIZE = (GRID_SIZE + GRID_SIZE              # x, y
                + 9 + 9 + 9                        # currency_dir, coord_dir, partner_dir
                + 3 + 3 + 3                        # currency_dist, coord_dist, partner_dist
                + (N_SIGNALS + 1) * MAX_MSG_LEN    # received message (4 token slots)
-               + _N_ENERGY_BINS)                  # own energy level
+               + _N_ENERGY_BINS                   # own energy level
+               + 1)                               # sender identity channel (Option 2)
 
 # Observable partner features for Theory of Mind
 _PARTNER_FEATURE_SIZE = 9 + 3 + (N_SIGNALS + 1) * MAX_MSG_LEN  # dir + dist + msg = 80
@@ -303,6 +304,7 @@ def _encode(state, energy=ENERGY_START):
     x, y, cd, kd, pd       = state[0], state[1], state[2], state[3], state[4]
     c_dist, k_dist, p_dist = state[5], state[6], state[7]
     msg = state[8:8 + MAX_MSG_LEN]
+    sender_id_int = state[12] if len(state) > 12 else 0
     vec = np.zeros(_INPUT_SIZE, dtype=np.float32)
     off = 0
     vec[off + x]      = 1.0; off += GRID_SIZE
@@ -316,6 +318,7 @@ def _encode(state, energy=ENERGY_START):
     for tok in msg:
         vec[off + tok] = 1.0; off += N_SIGNALS + 1
     vec[off + _energy_bin(energy)] = 1.0; off += _N_ENERGY_BINS
+    vec[off] = sender_id_int / SENDER_ID_MAX; off += 1  # Option 2: sender identity
     return vec
 
 
