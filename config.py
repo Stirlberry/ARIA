@@ -6,7 +6,7 @@ GRID_SIZE = 24
 CELL_SIZE = 32
 
 # Nodes
-N_CURRENCY_NODES = 16
+N_CURRENCY_NODES = 24
 N_COORD_NODES    = 12
 
 # Communication
@@ -75,7 +75,7 @@ MAX_POPULATION       = 10   # population ceiling
 MIN_COORD_AGENTS     = 2    # any 2 agents on a CO node triggers coordination
 
 # Energy system (Phase 3)
-ENERGY_START         = 300   # starting energy for all new agents
+ENERGY_START         = 400   # starting energy for all new agents
 ENERGY_MAX           = 600   # maximum energy cap — agents cannot exceed this
 ENERGY_NEWBORN       = 300   # starting energy for agents born via reproduction
 ENERGY_DRAIN_LOW     = 0.3   # passive energy drain per step (low drain rate)
