@@ -78,27 +78,77 @@ def next_agent_id(parent_a_id, parent_b_id, all_ids_ever):
     raise RuntimeError('Exhausted all 4-digit hex agent IDs')
 
 
-def kill_weakest(agents, episode):
-    dying   = min(agents.values(), key=lambda a: a.total_reward)
+def select_weakest_per_type(agents, agent_types):
+    """Return (weakest_T0, weakest_T1). Either may be None if that type has no agents."""
+    by_type = {0: [], 1: []}
+    for aid, agent in agents.items():
+        by_type[agent_types.get(aid, 0)].append(agent)
+    weakest_t0 = min(by_type[0], key=lambda a: a.total_reward) if by_type[0] else None
+    weakest_t1 = min(by_type[1], key=lambda a: a.total_reward) if by_type[1] else None
+    return weakest_t0, weakest_t1
+
+
+def kill_agent(agents, episode, target):
+    """Kill a specific agent by object reference."""
     summary = {
-        'retired_id':           dying.agent_id,
+        'retired_id':           target.agent_id,
         'episode':              episode,
-        'retired_total_reward': round(dying.total_reward, 2),
+        'retired_total_reward': round(target.total_reward, 2),
         'reason':               'natural_death',
     }
-    _save_retired(dying, summary)
-    _log_death(dying, episode)
+    _save_retired(target, summary)
+    _log_death(target, episode)
     new_agents = {a.agent_id: a for a in agents.values()
-                  if a.agent_id != dying.agent_id}
+                  if a.agent_id != target.agent_id}
     return new_agents, summary
 
 
-def energy_reproduce(parent_a, parent_b, agents, channel, episode,
-                     all_ids_ever, shared_replay=None):
+def cross_type_reproduce(parent_a, parent_b, agents, channel, episode, all_ids_ever, shared_replay=None):
+    """Cross-type collision reproduction: always produces one T0 child and one T1 child."""
+    t0_id = next_agent_id(parent_a.agent_id, parent_b.agent_id, all_ids_ever)
+    t0, w_a0, w_b0 = ARIAAgent.merge(parent_a, parent_b, t0_id,
+                                      child_type=0, shared_replay=shared_replay)
+
+    extended_ids = list(all_ids_ever) + [t0_id]
+    t1_id = next_agent_id(parent_a.agent_id, t0_id, extended_ids)
+    t1, w_a1, w_b1 = ARIAAgent.merge(parent_a, parent_b, t1_id,
+                                      child_type=1, shared_replay=shared_replay)
+
+    child_channel = CommunicationChannel(append_log=True)
+    child_channel.inherit_from(channel)
+
+    children = [(t0_id, 0, t0), (t1_id, 1, t1)]
+    for child_id, child_type, child in children:
+        _log_replication({
+            'child_id':   child_id,
+            'child_type': child_type,
+            'parent_a':   parent_a.agent_id,
+            'parent_b':   parent_b.agent_id,
+            'episode':    episode,
+            'child_hyperparams': {
+                'lr':         round(child.learning_rate, 6),
+                'n_layers':   int(child.n_layers),
+                'activation': child.activation,
+                'drain_rate': round(child.drain_rate, 3),
+            },
+        })
+
+    new_agents = dict(agents)
+    new_agents[t0_id] = t0
+    new_agents[t1_id] = t1
+    return new_agents, child_channel, children
+
+
+def monitor_replace(culled_type, agents, channel, episode, all_ids_ever, shared_replay=None):
+    """Immediately replace a Monitor-culled agent with a new agent of the same type.
+    Parents are the two highest-reward survivors regardless of their type."""
+    sorted_agents = sorted(agents.values(), key=lambda a: a.total_reward, reverse=True)
+    parent_a = sorted_agents[0]
+    parent_b = sorted_agents[1] if len(sorted_agents) > 1 else sorted_agents[0]
+
     child_id        = next_agent_id(parent_a.agent_id, parent_b.agent_id, all_ids_ever)
-    child_type      = random.choice([0, 1])   # random type — preserves population diversity
     child, w_a, w_b = ARIAAgent.merge(parent_a, parent_b, child_id,
-                                      child_type=child_type,
+                                      child_type=culled_type,
                                       shared_replay=shared_replay)
 
     child_channel = CommunicationChannel(append_log=True)
@@ -106,7 +156,7 @@ def energy_reproduce(parent_a, parent_b, agents, channel, episode,
 
     summary = {
         'child_id':   child_id,
-        'child_type': child_type,
+        'child_type': culled_type,
         'parent_a':   parent_a.agent_id,
         'parent_b':   parent_b.agent_id,
         'episode':    episode,

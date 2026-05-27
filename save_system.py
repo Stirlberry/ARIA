@@ -16,8 +16,8 @@ SAVE_DIR = 'logs/saves'
 
 
 def save_checkpoint(episode, agents, agent_types, channel, generation,
-                    last_replication_ep, all_ids_ever, plateau_mon,
-                    last_plateau_ep=0):
+                    last_replication_ep, all_ids_ever,
+                    plateau_history=None, last_plateau_ep=0):
     os.makedirs(SAVE_DIR, exist_ok=True)
 
     base      = f'checkpoint_ep{episode:06d}'
@@ -60,7 +60,7 @@ def save_checkpoint(episode, agents, agent_types, channel, generation,
     torch.save(weights, pt_path)
 
     lexicon_data    = {str(i): e.to_dict() for i, e in channel.lexicon.items()}
-    plateau_history = {aid: list(h) for aid, h in plateau_mon.history.items()}
+    plateau_history = plateau_history or {}
 
     meta = {
         'episode':             episode,

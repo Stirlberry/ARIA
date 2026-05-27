@@ -33,19 +33,17 @@ import save_system
 from environment import Environment
 from agent import ARIAAgent, make_replay_buffer
 from communication import CommunicationChannel
-from genetics import (kill_weakest, energy_reproduce,
-                      PlateauMonitor, get_alpha,
+from genetics import (select_weakest_per_type, kill_agent,
+                      cross_type_reproduce, get_alpha,
                       log_energy_death, log_ghost_absorption, log_extinction)
 from visualiser import Visualiser
 from config import (
     INITIAL_AGENTS, FOUNDER_TYPES, MAX_EPISODES, MAX_STEPS_PER_EPISODE,
     LEXICON_LOG_PATH,
-    MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
     AUTOSAVE_EVERY, ENV_DRIFT_INTERVAL,
     MAX_POPULATION, MIN_POPULATION,
     ENERGY_MAX, REWARD_DEATH, REWARD_REPRODUCE,
-    REPRODUCTION_THRESHOLD, REPRODUCTION_COST,
-    SPAWN_PAUSE_STEPS,
+    REPRODUCTION_THRESHOLD, REPRODUCTION_COST, SPAWN_PAUSE_STEPS,
 )
 
 
@@ -61,6 +59,7 @@ def _absorb_ghost_weights(agent, ghost_state_dict):
         agent.target_net.load_state_dict(agent.online_net.state_dict())
     except Exception:
         pass
+
 
 
 _SEPARATION_DIRS = [(0, 1), (2, 3), (4, 7), (5, 6)]
@@ -80,18 +79,13 @@ def main():
         agents[agent_id]      = ARIAAgent(agent_id, agent_type=t, replay=shared_replay)
         agent_types[agent_id] = t
 
-    env         = Environment(list(agents.keys()), agent_types=agent_types)
-    channel     = CommunicationChannel()
-    vis         = Visualiser()
-    plateau_mon = PlateauMonitor()
-
-    for agent_id in agents:
-        plateau_mon.register(agent_id)
+    env     = Environment(list(agents.keys()), agent_types=agent_types)
+    channel = CommunicationChannel()
+    vis     = Visualiser()
 
     all_ids_ever        = list(INITIAL_AGENTS)
     generation          = 0
     last_replication_ep = 0
-    last_plateau_ep     = 0
 
     print('=' * 64)
     print('  ARIA-2 — Lewis Signaling Game')
@@ -101,7 +95,7 @@ def main():
     print('=' * 64)
     type_str = '  '.join(f'{a.split("-")[1]}:T{agent_types[a]}' for a in INITIAL_AGENTS)
     print(f'  Founders  : {type_str}')
-    print(f'  Replication: min {MIN_REPLICATION_INTERVAL} / max {MAX_REPLICATION_INTERVAL} eps')
+    print(f'  Balance   : checked every episode — majority type culled if uneven')
     print(f'  ESC to quit')
     print('=' * 64)
 
@@ -109,12 +103,7 @@ def main():
     meta, pt_path = save_system.prompt_resume()
     if meta is not None:
         (agents, agent_types, channel, generation, last_replication_ep,
-         all_ids_ever, plateau_history, start_episode,
-         last_plateau_ep) = save_system.restore(meta, pt_path, shared_replay)
-        for agent_id, history in plateau_history.items():
-            plateau_mon.register(agent_id)
-            for r in history:
-                plateau_mon.history[agent_id].append(r)
+         all_ids_ever, _, start_episode, _) = save_system.restore(meta, pt_path, shared_replay)
         env.reset(agent_ids=list(agents.keys()), agent_types=agent_types)
         print(f'  Resumed at episode {start_episode - 1:,}  '
               f'gen {generation}  agents: {", ".join(agents)}\n')
@@ -130,26 +119,25 @@ def main():
                 env.drift_nodes()
                 print(f'  [Drift] Nodes relocated at episode {episode}')
 
-            # ── Monitor: cull weakest when pop > MIN_POPULATION ────────────────
-            if len(agents) > MIN_POPULATION:
-                should_kill, kill_reason = plateau_mon.should_replicate(
-                    agents, episode, last_plateau_ep
-                )
-                if should_kill:
-                    print(f'\n  [Monitor] Retirement at episode {episode} — {kill_reason}')
-                    retiring      = min(agents.values(), key=lambda a: a.total_reward)
-                    retire_pos    = env.agent_positions.get(retiring.agent_id)
-                    retire_weights = retiring.online_net.state_dict()
-                    agents, death_summary = kill_weakest(agents, episode)
-                    agent_types.pop(death_summary['retired_id'], None)
-                    last_plateau_ep = episode
-                    plateau_mon.deregister(death_summary['retired_id'])
-                    if retire_pos:
-                        env.add_ghost_node(retire_pos, retire_weights)
-                    env.reset(agent_ids=list(agents.keys()), agent_types=agent_types, soft=True)
-                    print(f'  Died    : {death_summary["retired_id"]} '
-                          f'(reward {death_summary["retired_total_reward"]:.1f})')
-                    print(f'  Survivors: {", ".join(agents)}\n')
+            # ── Balance check: every episode, cull weakest of majority type ──
+            counts = {0: 0, 1: 0}
+            for aid in agents:
+                counts[agent_types.get(aid, 0)] += 1
+            if counts[0] != counts[1] and len(agents) > MIN_POPULATION:
+                majority_type = 0 if counts[0] > counts[1] else 1
+                pool    = {aid: a for aid, a in agents.items()
+                           if agent_types.get(aid, 0) == majority_type}
+                weakest = min(pool.values(), key=lambda a: a.total_reward)
+                retire_pos     = env.agent_positions.get(weakest.agent_id)
+                retire_weights = weakest.online_net.state_dict()
+                agents, death_summary = kill_agent(agents, episode, weakest)
+                agent_types.pop(death_summary['retired_id'], None)
+                if retire_pos:
+                    env.add_ghost_node(retire_pos, retire_weights)
+                env.reset(agent_ids=list(agents.keys()), agent_types=agent_types, soft=True)
+                print(f'  [Balance] ep {episode} — T0:{counts[0]} T1:{counts[1]} '
+                      f'→ removed {death_summary["retired_id"]} T{majority_type} '
+                      f'(reward {death_summary["retired_total_reward"]:.1f})')
 
             states             = env.reset(agent_ids=list(agents.keys()),
                                            agent_types=agent_types, soft=True)
@@ -172,7 +160,7 @@ def main():
                     actions[agent_id]      = action
                     signals_sent[agent_id] = ARIAAgent.get_signal_from_action(action)
 
-                # ── Birth sequence ─────────────────────────────────────────────
+                # ── Birth sequence: T0×T1 collision produces one T0 + one T1 ──
                 if spawn_event is not None:
                     pa_id = spawn_event['parent_a_id']
                     pb_id = spawn_event['parent_b_id']
@@ -181,8 +169,8 @@ def main():
                     else:
                         spawn_event['pause_remaining'] -= 1
                         if spawn_event['pause_remaining'] > 0:
-                            actions[pa_id] = 8
-                            actions[pb_id] = 8
+                            actions[pa_id]      = 8
+                            actions[pb_id]      = 8
                             signals_sent[pa_id] = None
                             signals_sent[pb_id] = None
                         else:
@@ -192,33 +180,29 @@ def main():
                             signals_sent[pb_id] = None
                             parent_a = agents[pa_id]
                             parent_b = agents[pb_id]
-                            agents, new_channel, summary = energy_reproduce(
+                            agents, new_channel, children = cross_type_reproduce(
                                 parent_a, parent_b, agents, channel, episode,
-                                set(all_ids_ever), shared_replay=shared_replay
+                                all_ids_ever, shared_replay=shared_replay
                             )
                             channel.flush_log()
-                            channel    = new_channel
-                            child_id   = summary['child_id']
-                            child_type = summary['child_type']
-                            all_ids_ever.append(child_id)
-                            agent_types[child_id] = child_type
-                            generation           += 1
-                            last_replication_ep   = episode
-                            plateau_mon.register(child_id)
-                            env.add_newborn(child_id, spawn_event['spawn_point'], child_type)
-                            last_signal_step[child_id]  = -(config.SIGNAL_WINDOW + 1)
-                            last_signal_idx[child_id]   = None
-                            last_message_step[child_id] = -(config.SIGNAL_WINDOW + 1)
-                            last_message_idx[child_id]  = None
-                            ep_rewards[child_id]        = 0.0
-                            actions[child_id]           = 8
-                            signals_sent[child_id]      = None
-                            vis.notify_replication(summary)
-                            hp  = summary['child_hyperparams']
-                            c_e = agents[child_id].energy
-                            print(f'\n  [Gen {generation}] Born {child_id} '
-                                  f'T{child_type} (energy={c_e:.0f}) '
-                                  f'at {spawn_event["spawn_point"]} ep {episode}')
+                            channel = new_channel
+                            for child_id, child_type, child_agent in children:
+                                all_ids_ever.append(child_id)
+                                agent_types[child_id] = child_type
+                                generation           += 1
+                                last_replication_ep   = episode
+                                env.add_newborn(child_id, spawn_event['spawn_point'], child_type)
+                                last_signal_step[child_id]  = -(config.SIGNAL_WINDOW + 1)
+                                last_signal_idx[child_id]   = None
+                                last_message_step[child_id] = -(config.SIGNAL_WINDOW + 1)
+                                last_message_idx[child_id]  = None
+                                ep_rewards[child_id]        = 0.0
+                                actions[child_id]           = 8
+                                signals_sent[child_id]      = None
+                                c_e = agents[child_id].energy
+                                print(f'\n  [Gen {generation}] Born {child_id} '
+                                      f'T{child_type} (energy={c_e:.0f}) '
+                                      f'at {spawn_event["spawn_point"]} ep {episode}')
                             print(f'  Parents : {pa_id} (T{agent_types.get(pa_id,"?")}) '
                                   f'+ {pb_id} (T{agent_types.get(pb_id,"?")})\n')
                             spawn_event = None
@@ -232,10 +216,6 @@ def main():
                     actions, signals_sent,
                     agent_energies={a: agents[a].energy for a in agents}
                 )
-
-                if spawn_event is not None:
-                    env.clear_msg_buffer(spawn_event['parent_a_id'])
-                    env.clear_msg_buffer(spawn_event['parent_b_id'])
 
                 positions = env.get_positions()
 
@@ -334,15 +314,33 @@ def main():
                                 if msg_tokens:
                                     channel.sequence_lexicon.credit_coord(msg_tokens)
 
-                agent_list = list(agents.keys())
+                for agent_id, agent in agents.items():
+                    if agent_id in newly_dead:
+                        continue
+                    if agent_id not in states or agent_id not in next_states:
+                        continue
+                    agent.update(
+                        states[agent_id],
+                        actions[agent_id],
+                        rewards[agent_id],
+                        next_states[agent_id],
+                        info['coord_achieved'],
+                        pre_energy=pre_energies.get(agent_id, agent.energy),
+                    )
+                    ep_rewards[agent_id] += rewards[agent_id]
 
-                # ── Energy-based reproduction ──────────────────────────────────
-                if spawn_event is None and len(agents) < MAX_POPULATION:
+                states = {a: next_states[a] for a in agents if a in next_states}
+
+                # ── Cross-type reproduction: T0+T1 collision → one T0 + one T1 ─
+                agent_list = list(agents.keys())
+                if spawn_event is None and len(agents) + 2 <= MAX_POPULATION:
                     for i in range(len(agent_list)):
                         for j in range(i + 1, len(agent_list)):
                             a_id, b_id = agent_list[i], agent_list[j]
                             if a_id in newly_dead or b_id in newly_dead:
                                 continue
+                            if agent_types.get(a_id, 0) == agent_types.get(b_id, 0):
+                                continue  # same type — cannot reproduce
                             ag_a = agents.get(a_id)
                             ag_b = agents.get(b_id)
                             if ag_a is None or ag_b is None:
@@ -368,23 +366,6 @@ def main():
                         if spawn_event is not None:
                             break
 
-                for agent_id, agent in agents.items():
-                    if agent_id in newly_dead:
-                        continue
-                    if agent_id not in states or agent_id not in next_states:
-                        continue
-                    agent.update(
-                        states[agent_id],
-                        actions[agent_id],
-                        rewards[agent_id],
-                        next_states[agent_id],
-                        info['coord_achieved'],
-                        pre_energy=pre_energies.get(agent_id, agent.energy),
-                    )
-                    ep_rewards[agent_id] += rewards[agent_id]
-
-                states = {a: next_states[a] for a in agents if a in next_states}
-
                 vis.render(env, agents, agent_types, channel, episode, step,
                            ep_rewards, generation, spawn_event=spawn_event)
 
@@ -397,7 +378,6 @@ def main():
                 agent.end_episode()
                 partner_ids = [aid for aid in agents if aid != agent_id]
                 agent.update_reputation(partner_ids, ep_coord_any)
-                plateau_mon.record(agent_id, ep_rewards[agent_id])
 
             vis.record_episode(ep_rewards)
 
@@ -439,8 +419,7 @@ def main():
                 channel.flush_log()
                 save_system.save_checkpoint(
                     episode, agents, agent_types, channel, generation,
-                    last_replication_ep, all_ids_ever, plateau_mon,
-                    last_plateau_ep
+                    last_replication_ep, all_ids_ever
                 )
 
     except KeyboardInterrupt:
