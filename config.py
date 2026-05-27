@@ -73,6 +73,7 @@ AUTOSAVE_EVERY        = 50
 # Population
 INITIAL_AGENTS   = ['ARIA-CAFE', 'ARIA-BABE', 'ARIA-DEAD', 'ARIA-BEEF']
 MAX_POPULATION       = 10   # population ceiling
+MIN_POPULATION       = 5    # Monitor will not cull below this floor
 MIN_COORD_AGENTS     = 2    # any 2 agents on a CO node triggers coordination
 
 # Energy system (Phase 3)
@@ -97,9 +98,9 @@ GHOST_NODE_ACCESSES = 1       # times a ghost node can be accessed before it dis
 # Replication
 MUTATION_STD             = 0.02
 HYPERPARAM_MUTATION_STD  = 0.10
-PLATEAU_WINDOW           = 50
+PLATEAU_WINDOW           = 25
 PLATEAU_DELTA_THRESH     = 0.10   # fraction of agent's mean absolute reward (scaled)
-MIN_REPLICATION_INTERVAL = 500
+MIN_REPLICATION_INTERVAL = 200
 MAX_REPLICATION_INTERVAL = 1000
 
 # Environmental co-evolution

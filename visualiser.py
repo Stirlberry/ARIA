@@ -308,9 +308,14 @@ class Visualiser:
 
         n_compound = channel.compound_lexicon.crystallised_count()
         blit(f'COMPOUNDS  [{n_compound} crystallised]', WHITE, 'md')
-        for entry in list(channel.compound_lexicon.entries.values())[-4:]:
+        top_compounds = sorted(
+            channel.compound_lexicon.entries.values(),
+            key=lambda e: (e.crystallised, e.coord_successes),
+            reverse=True
+        )[:4]
+        for entry in top_compounds:
             col = COMPOUND_COL if entry.crystallised else MUTED
-            sym = entry.symbol if entry.crystallised else '...'
+            sym = entry.symbol if entry.crystallised else '[?]'
             blit(f'  {sym:6s}  coord:{entry.coord_successes:3d}/{entry.use_count:4d}',
                  col, 'sm')
 

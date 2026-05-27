@@ -39,7 +39,7 @@ from config import (
     LEXICON_LOG_PATH,
     MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
     AUTOSAVE_EVERY, ENV_DRIFT_INTERVAL,
-    MAX_POPULATION,
+    MAX_POPULATION, MIN_POPULATION,
     ENERGY_MAX, REWARD_DEATH, REWARD_REPRODUCE,
     REPRODUCTION_THRESHOLD, REPRODUCTION_COST,
     SPAWN_PAUSE_STEPS,
@@ -100,7 +100,8 @@ def main():
     meta, pt_path = save_system.prompt_resume()
     if meta is not None:
         (agents, channel, generation, last_replication_ep,
-         all_ids_ever, plateau_history, start_episode) = save_system.restore(meta, pt_path, shared_replay)
+         all_ids_ever, plateau_history, start_episode,
+         last_plateau_ep) = save_system.restore(meta, pt_path, shared_replay)
         for agent_id, history in plateau_history.items():
             plateau_mon.register(agent_id)
             for r in history:
@@ -121,9 +122,9 @@ def main():
                 env.drift_nodes()
                 print(f'  [Drift] Nodes relocated at episode {episode}')
 
-            # ── Death phase: plateau triggers kill-weakest (needs ≥ 2 to compare) ──
+            # ── Death phase: plateau triggers kill-weakest (needs > MIN_POPULATION to cull) ──
             # if len(agents) > 1:                          # old: fired regardless of population size
-            if len(agents) >= MAX_POPULATION:
+            if len(agents) > MIN_POPULATION:
                 should_kill, kill_reason = plateau_mon.should_replicate(
                     agents, episode, last_plateau_ep
                 )
@@ -464,7 +465,8 @@ def main():
                 channel.flush_log()
                 save_system.save_checkpoint(
                     episode, agents, channel, generation,
-                    last_replication_ep, all_ids_ever, plateau_mon
+                    last_replication_ep, all_ids_ever, plateau_mon,
+                    last_plateau_ep
                 )
 
     except KeyboardInterrupt:
@@ -472,7 +474,8 @@ def main():
         channel.flush_log()
         save_system.save_checkpoint(
             episode, agents, channel, generation,
-            last_replication_ep, all_ids_ever, plateau_mon
+            last_replication_ep, all_ids_ever, plateau_mon,
+            last_plateau_ep
         )
         print('  Exiting.')
         return
@@ -480,7 +483,8 @@ def main():
     channel.flush_log()
     save_system.save_checkpoint(
         MAX_EPISODES, agents, channel, generation,
-        last_replication_ep, all_ids_ever, plateau_mon
+        last_replication_ep, all_ids_ever, plateau_mon,
+        last_plateau_ep
     )
     print('\n  Training complete.')
     print(f'  Generations reached : {generation}')
