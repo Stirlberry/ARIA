@@ -11,8 +11,8 @@ GRID_H    = 24
 CELL_SIZE = 32
 
 # Nodes
-N_CURRENCY_NODES       = 48
-N_TARGET_NODES_PER_TYPE = 12   # 12 visible to type-0, 12 visible to type-1 (24 total)
+N_CURRENCY_NODES = 48
+N_TARGET_NODES   = 24   # all visible to T0 (Sender); T1 is fully blind
 
 # Agent types
 FOUNDER_TYPES = {
@@ -83,7 +83,7 @@ AUTOSAVE_EVERY        = 50
 # Population
 INITIAL_AGENTS   = ['ARIA-CAFE', 'ARIA-BABE', 'ARIA-DEAD', 'ARIA-BEEF']
 MAX_POPULATION   = 10
-MIN_POPULATION   = 5
+MIN_POPULATION   = 4
 MIN_COORD_AGENTS = 2
 
 # Energy

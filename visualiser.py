@@ -1,6 +1,6 @@
 """
 ARIA-2 Visualiser — Lewis Signaling Game
-Type-0 targets shown in cyan, type-1 targets in magenta.
+Target nodes shown in cyan (visible to T0 only; T1 is blind).
 Type-0 agents drawn as circles, type-1 agents drawn as diamonds.
 """
 
@@ -21,8 +21,7 @@ MUTED        = (110, 110, 140)
 GOLD         = (255, 220, 80)
 REPL_COL     = (100, 230, 160)
 CURRENCY_COL = (70,  210, 110)
-TARGET0_COL  = (80,  220, 220)   # cyan  — type-0 targets
-TARGET1_COL  = (220, 80,  220)   # magenta — type-1 targets
+TARGET_COL   = (80,  220, 220)   # cyan — target nodes (visible to T0 only)
 COMPOUND_COL = (255, 160, 80)
 GHOST_COL    = (120, 120, 150)
 BIRTH_COL    = (255, 240, 100)
@@ -42,7 +41,7 @@ ROLE_COL = {
     'exploring':   (130, 130, 160),
 }
 
-TYPE_COL = {0: TARGET0_COL, 1: TARGET1_COL}
+TYPE_COL = {0: TARGET_COL, 1: TARGET_COL}
 
 
 def _agent_colour(agent_id):
@@ -114,7 +113,7 @@ class Visualiser:
     def _draw_grid(self, env, agents, agent_types, spawn_event=None):
         grid_px_w = GRID_W * self.cell
         grid_px_h = GRID_H * self.cell
-        currency_nodes, target0_nodes, target1_nodes = env.get_nodes()
+        currency_nodes, target_nodes = env.get_nodes()
         positions = env.get_positions()
 
         for x in range(GRID_W):
@@ -134,25 +133,14 @@ class Visualiser:
             self.screen.blit(t, (cx*self.cell+self.cell//2 - t.get_width()//2,
                                   cy*self.cell+self.cell//2 - t.get_height()//2))
 
-        # Type-0 targets (cyan)
-        for (tx, ty) in target0_nodes:
+        # Target nodes (cyan — visible to T0 only)
+        for (tx, ty) in target_nodes:
             pad = 8
-            pygame.draw.rect(self.screen, TARGET0_COL,
+            pygame.draw.rect(self.screen, TARGET_COL,
                              pygame.Rect(tx*self.cell+pad, ty*self.cell+pad,
                                          self.cell-pad*2, self.cell-pad*2),
                              border_radius=3)
-            t = self.font_sm.render('T0', True, BG)
-            self.screen.blit(t, (tx*self.cell+self.cell//2 - t.get_width()//2,
-                                  ty*self.cell+self.cell//2 - t.get_height()//2))
-
-        # Type-1 targets (magenta)
-        for (tx, ty) in target1_nodes:
-            pad = 8
-            pygame.draw.rect(self.screen, TARGET1_COL,
-                             pygame.Rect(tx*self.cell+pad, ty*self.cell+pad,
-                                         self.cell-pad*2, self.cell-pad*2),
-                             border_radius=3)
-            t = self.font_sm.render('T1', True, BG)
+            t = self.font_sm.render('T', True, BG)
             self.screen.blit(t, (tx*self.cell+self.cell//2 - t.get_width()//2,
                                   ty*self.cell+self.cell//2 - t.get_height()//2))
 
@@ -360,7 +348,7 @@ class Visualiser:
         leg_y = self.height - 36
         pygame.draw.line(self.screen, PANEL_LINE, (px-4, leg_y), (self.width-8, leg_y), 1)
         self.screen.blit(
-            self.font_sm.render('cyan=T0  magenta=T1  ◯T0  ◇T1  S  ESC', True, MUTED),
+            self.font_sm.render('cyan=T (T0 visible only)  ◯T0  ◇T1  S  ESC', True, MUTED),
             (px, leg_y + 8)
         )
 

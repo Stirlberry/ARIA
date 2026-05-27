@@ -1,23 +1,23 @@
 """
 ARIA-2 Environment — Lewis Signaling Game
-Grid world with currency nodes, typed target nodes, ghost nodes, and fog of war.
+Grid world with currency nodes, target nodes, ghost nodes, and fog of war.
 
 Lewis game mechanics:
   - Agents have a type (0 or 1), assigned at birth.
-  - Target nodes come in two types: target_nodes[0] and target_nodes[1].
-  - A type-0 agent can ONLY see type-0 target nodes and vice versa.
+  - There is one set of target nodes (24). Only T0 (Sender) can see them.
+  - Type-1 (Receiver) is fully blind to all targets.
   - Reward fires only when BOTH types occupy the SAME target tile simultaneously.
   - Agents only receive signals from cross-type agents.
-  - Result: the sighted agent (who sees the target) MUST signal the blind agent.
+  - Result: T0 MUST signal T1 to guide it — T1 has no target information of its own.
 
-State per agent (same element count as ARIA):
+State per agent:
   (x, y,
    currency_dir, target_dir, partner_dir,
    currency_dist, target_dist, partner_dist,
    msg[0], msg[1], msg[2], msg[3],
    sender_id_int)
 
-  target_dir/dist : direction/distance to nearest VISIBLE target of own type.
+  target_dir/dist : T0 sees nearest target; T1 always gets 0 (blind).
   partner_dir/dist: direction/distance to nearest CROSS-TYPE agent in fog radius.
   msg             : last message received from nearest cross-type agent in shout range.
 """
@@ -25,7 +25,7 @@ State per agent (same element count as ARIA):
 import random
 import numpy as np
 from config import (
-    GRID_W, GRID_H, N_CURRENCY_NODES, N_TARGET_NODES_PER_TYPE,
+    GRID_W, GRID_H, N_CURRENCY_NODES, N_TARGET_NODES,
     REWARD_CURRENCY, REWARD_COORD, REWARD_STEP, N_SIGNALS,
     MAX_MSG_LEN, ENV_DRIFT_N_NODES,
     CURRENCY_NODE_CAPACITY, REGEN_MIN_STEPS, REGEN_MAX_STEPS, FOG_RADIUS,
@@ -43,7 +43,7 @@ class Environment:
         self.agent_ids       = list(agent_ids)
         self.agent_types     = dict(agent_types) if agent_types else {}
         self.currency_nodes  = set()
-        self.target_nodes    = [set(), set()]   # [type-0 targets, type-1 targets]
+        self.target_nodes    = set()   # all targets; only T0 (Sender) can see them
         self.agent_positions = {}
         self._msg_buffers    = {}
         self._last_msgs      = {}
@@ -66,7 +66,7 @@ class Environment:
 
         if not soft:
             self.currency_nodes  = set()
-            self.target_nodes    = [set(), set()]
+            self.target_nodes    = set()
             self.agent_positions = {}
             self.steps           = 0
             self._node_stock     = {}
@@ -81,8 +81,7 @@ class Environment:
                                     if a in self.agent_ids}
             occupied = (set(self.agent_positions.values()) |
                         self.currency_nodes |
-                        self.target_nodes[0] |
-                        self.target_nodes[1])
+                        self.target_nodes)
             for a in self.agent_ids:
                 if a not in self.agent_positions:
                     for _ in range(200):
@@ -121,15 +120,14 @@ class Environment:
                     occupied.add(pos)
                     break
 
-        for t_type in range(2):
-            for _ in range(N_TARGET_NODES_PER_TYPE):
-                while True:
-                    pos = (random.randint(0, self.grid_w - 1),
-                           random.randint(0, self.grid_h - 1))
-                    if pos not in occupied:
-                        self.target_nodes[t_type].add(pos)
-                        occupied.add(pos)
-                        break
+        for _ in range(N_TARGET_NODES):
+            while True:
+                pos = (random.randint(0, self.grid_w - 1),
+                       random.randint(0, self.grid_h - 1))
+                if pos not in occupied:
+                    self.target_nodes.add(pos)
+                    occupied.add(pos)
+                    break
 
     # ── Spatial helpers ────────────────────────────────────────────────────────
 
@@ -173,8 +171,7 @@ class Environment:
     def _spawn_node(self, node_type):
         occupied = (set(self.agent_positions.values()) |
                     self.currency_nodes |
-                    self.target_nodes[0] |
-                    self.target_nodes[1])
+                    self.target_nodes)
         for _ in range(200):
             pos = (random.randint(0, self.grid_w - 1),
                    random.randint(0, self.grid_h - 1))
@@ -182,10 +179,8 @@ class Environment:
                 if node_type == 'currency':
                     self.currency_nodes.add(pos)
                     self._node_stock[pos] = CURRENCY_NODE_CAPACITY
-                elif node_type == 'target_0':
-                    self.target_nodes[0].add(pos)
-                elif node_type == 'target_1':
-                    self.target_nodes[1].add(pos)
+                elif node_type == 'target':
+                    self.target_nodes.add(pos)
                 return
 
     # ── State ──────────────────────────────────────────────────────────────────
@@ -200,11 +195,14 @@ class Environment:
         currency_dir     = self._nearest_direction(pos, visible_currency)
         currency_dist    = self._nearest_dist_bin(pos, visible_currency)
 
-        # Own-type targets only (cross-type targets are invisible — Lewis game)
-        my_targets       = self.target_nodes[agent_type]
-        visible_targets  = self._visible_nodes(pos, my_targets)
-        target_dir       = self._nearest_direction(pos, visible_targets)
-        target_dist      = self._nearest_dist_bin(pos, visible_targets)
+        # Strict Lewis: only T0 (Sender) sees targets. T1 (Receiver) is fully blind.
+        if agent_type == 0:
+            visible_targets = self._visible_nodes(pos, self.target_nodes)
+            target_dir      = self._nearest_direction(pos, visible_targets)
+            target_dist     = self._nearest_dist_bin(pos, visible_targets)
+        else:
+            target_dir  = 0
+            target_dist = 0
 
         # Partner = nearest CROSS-TYPE agent within fog radius
         cross_agent_positions = {
@@ -318,25 +316,25 @@ class Environment:
                         del self._node_stock[pos]
                         self._queue_spawn('currency')
 
-        # ── Lewis game coordination: both types must be on the same target tile ─
-        for t_type in range(2):
-            for target_pos in list(self.target_nodes[t_type]):
-                type0_here = [a for a in self.agent_ids
-                              if self.agent_positions.get(a) == target_pos
-                              and self.agent_types.get(a, 0) == 0]
-                type1_here = [a for a in self.agent_ids
-                              if self.agent_positions.get(a) == target_pos
-                              and self.agent_types.get(a, 0) == 1]
-                if type0_here and type1_here:
-                    participants = type0_here + type1_here
-                    self.target_nodes[t_type].discard(target_pos)
-                    for a in participants:
-                        rewards[a] += REWARD_COORD
-                        info['energy_gains'][a] = (
-                            info['energy_gains'].get(a, 0) + ENERGY_FROM_CO)
-                    info['coord_achieved'] = True
-                    info['coord_agents'].extend(participants)
-                    self._queue_spawn(f'target_{t_type}')
+        # ── Strict Lewis coordination: T1 must reach a T0 target tile ───────────
+        # Only T0 targets count — T1 is blind to them and must be guided by signals.
+        for target_pos in list(self.target_nodes):
+            type0_here = [a for a in self.agent_ids
+                          if self.agent_positions.get(a) == target_pos
+                          and self.agent_types.get(a, 0) == 0]
+            type1_here = [a for a in self.agent_ids
+                          if self.agent_positions.get(a) == target_pos
+                          and self.agent_types.get(a, 0) == 1]
+            if type0_here and type1_here:
+                participants = type0_here + type1_here
+                self.target_nodes.discard(target_pos)
+                for a in participants:
+                    rewards[a] += REWARD_COORD
+                    info['energy_gains'][a] = (
+                        info['energy_gains'].get(a, 0) + ENERGY_FROM_CO)
+                info['coord_achieved'] = True
+                info['coord_agents'].extend(participants)
+                self._queue_spawn('target')
 
         # ── Ghost node collection ──────────────────────────────────────────────
         for agent_id in self.agent_ids:
@@ -350,8 +348,7 @@ class Environment:
 
         next_states = self._get_states()
         done        = (not self.currency_nodes
-                       and not self.target_nodes[0]
-                       and not self.target_nodes[1]
+                       and not self.target_nodes
                        and not self._pending_spawns)
 
         return next_states, rewards, done, info, signals_sent
@@ -362,8 +359,7 @@ class Environment:
         if n is None:
             n = ENV_DRIFT_N_NODES
         all_nodes = ([(pos, 'currency') for pos in self.currency_nodes] +
-                     [(pos, 'target_0') for pos in self.target_nodes[0]] +
-                     [(pos, 'target_1') for pos in self.target_nodes[1]])
+                     [(pos, 'target')   for pos in self.target_nodes])
         if not all_nodes:
             return
         to_move  = random.sample(all_nodes, min(n, len(all_nodes)))
@@ -373,25 +369,20 @@ class Environment:
             if node_type == 'currency':
                 self.currency_nodes.discard(old_pos)
                 self._node_stock.pop(old_pos, None)
-            elif node_type == 'target_0':
-                self.target_nodes[0].discard(old_pos)
-            elif node_type == 'target_1':
-                self.target_nodes[1].discard(old_pos)
+            elif node_type == 'target':
+                self.target_nodes.discard(old_pos)
 
             for _ in range(200):
                 new_pos = (random.randint(0, self.grid_w - 1),
                            random.randint(0, self.grid_h - 1))
                 if (new_pos not in occupied
                         and new_pos not in self.currency_nodes
-                        and new_pos not in self.target_nodes[0]
-                        and new_pos not in self.target_nodes[1]):
+                        and new_pos not in self.target_nodes):
                     if node_type == 'currency':
                         self.currency_nodes.add(new_pos)
                         self._node_stock[new_pos] = CURRENCY_NODE_CAPACITY
-                    elif node_type == 'target_0':
-                        self.target_nodes[0].add(new_pos)
-                    elif node_type == 'target_1':
-                        self.target_nodes[1].add(new_pos)
+                    elif node_type == 'target':
+                        self.target_nodes.add(new_pos)
                     occupied.add(new_pos)
                     break
 
@@ -427,8 +418,7 @@ class Environment:
 
     def get_nodes(self):
         return (set(self.currency_nodes),
-                set(self.target_nodes[0]),
-                set(self.target_nodes[1]))
+                set(self.target_nodes))
 
     def get_ghost_nodes(self):
         return dict(self.ghost_nodes)
