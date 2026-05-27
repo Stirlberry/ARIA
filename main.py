@@ -6,9 +6,11 @@ Phase 3: Energy-based survival, death, ghost nodes, emergent communication,
 
 Run:
     python main.py
+    python main.py --no-comms   # disable all inter-agent signals (ablation test)
 """
 
 import sys
+import argparse
 sys.stdout.reconfigure(line_buffering=True)
 
 # Load .env file if present — sets ANTHROPIC_API_KEY without needing export
@@ -69,6 +71,12 @@ def _choose_separation():
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--no-comms', action='store_true',
+                        help='Disable all inter-agent signals (ablation test)')
+    args = parser.parse_args()
+    no_comms = args.no_comms
+
     shared_replay  = make_replay_buffer()
     agents         = {a: ARIAAgent(a, replay=shared_replay) for a in INITIAL_AGENTS}
     env            = Environment(list(agents.keys()))
@@ -87,6 +95,8 @@ def main():
     print('=' * 64)
     print('  ARIA — Adaptive Reasoning and Interaction Agent')
     print('  Phase 3: Survival, Reproduction, Emergent Communication')
+    if no_comms:
+        print('  *** ABLATION MODE: inter-agent signals disabled ***')
     print('=' * 64)
     print(f'  Founders        : {" + ".join(INITIAL_AGENTS)}')
     print(f'  Replication     : self-directed  '
@@ -165,6 +175,9 @@ def main():
                     action = agent.select_action(states[agent_id])
                     actions[agent_id]      = action
                     signals_sent[agent_id] = ARIAAgent.get_signal_from_action(action)
+
+                if no_comms:
+                    signals_sent = {a: None for a in agents}
 
                 # ── Birth sequence: pause parents, reveal child on countdown ──
                 if spawn_event is not None:
