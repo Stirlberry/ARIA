@@ -60,7 +60,8 @@ WORLD_MODEL_WARMUP = 200
 REWARD_CURRENCY = 10.0
 REWARD_COORD    = 30.0
 REWARD_STEP     = -0.1
-SIGNAL_WINDOW   = 5
+SIGNAL_WINDOW        = 5
+COORD_SIGNAL_WINDOW  = 10   # steps before coord within which a signal must have been sent
 INTRINSIC_BETA  = 1.0
 EPISODIC_BETA   = 0.5
 

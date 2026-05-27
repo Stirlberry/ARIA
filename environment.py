@@ -31,6 +31,7 @@ from config import (
     CURRENCY_NODE_CAPACITY, REGEN_MIN_STEPS, REGEN_MAX_STEPS, FOG_RADIUS,
     ENERGY_FROM_CURRENCY, ENERGY_FROM_CO,
     GHOST_NODE_ACCESSES, CHATTER_RANGE, SHOUT_RANGE, ENERGY_MAX,
+    COORD_SIGNAL_WINDOW,
 )
 
 _NO_SIGNAL = N_SIGNALS
@@ -49,9 +50,10 @@ class Environment:
         self._last_msgs      = {}
         self.steps           = 0
 
-        self._node_stock     = {}
-        self._pending_spawns = []
-        self.ghost_nodes     = {}
+        self._node_stock       = {}
+        self._pending_spawns   = []
+        self.ghost_nodes       = {}
+        self._last_signal_step = {}   # agent_id → step when they last sent a signal
 
         self.reset()
 
@@ -69,9 +71,10 @@ class Environment:
             self.target_nodes    = set()
             self.agent_positions = {}
             self.steps           = 0
-            self._node_stock     = {}
-            self._pending_spawns = []
-            self.ghost_nodes     = {}
+            self._node_stock       = {}
+            self._pending_spawns   = []
+            self.ghost_nodes       = {}
+            self._last_signal_step = {}
             self._msg_buffers    = {a: [] for a in self.agent_ids}
             self._last_msgs      = {a: [_NO_SIGNAL] * MAX_MSG_LEN for a in self.agent_ids}
             self._place_entities()
@@ -271,6 +274,7 @@ class Environment:
                     self._last_msgs[agent_id]       = padded
                     info['messages_sent'][agent_id] = list(buf)
                     self._msg_buffers[agent_id]     = []
+                    self._last_signal_step[agent_id] = self.steps
             else:
                 token = action - 8
                 if len(self._msg_buffers[agent_id]) < MAX_MSG_LEN:
@@ -317,7 +321,8 @@ class Environment:
                         self._queue_spawn('currency')
 
         # ── Strict Lewis coordination: T1 must reach a T0 target tile ───────────
-        # Only T0 targets count — T1 is blind to them and must be guided by signals.
+        # Reward only fires if T0 sent a signal within COORD_SIGNAL_WINDOW steps
+        # (causal gate). Random meetings consume the target but give no reward.
         for target_pos in list(self.target_nodes):
             type0_here = [a for a in self.agent_ids
                           if self.agent_positions.get(a) == target_pos
@@ -327,14 +332,22 @@ class Environment:
                           and self.agent_types.get(a, 0) == 1]
             if type0_here and type1_here:
                 participants = type0_here + type1_here
+                signal_assisted = any(
+                    self.steps - self._last_signal_step.get(t0, -99999) <= COORD_SIGNAL_WINDOW
+                    for t0 in type0_here
+                )
                 self.target_nodes.discard(target_pos)
-                for a in participants:
-                    rewards[a] += REWARD_COORD
-                    info['energy_gains'][a] = (
-                        info['energy_gains'].get(a, 0) + ENERGY_FROM_CO)
+                self._queue_spawn('target')
                 info['coord_achieved'] = True
                 info['coord_agents'].extend(participants)
-                self._queue_spawn('target')
+                if signal_assisted:
+                    info['n_coord_signalled'] = info.get('n_coord_signalled', 0) + 1
+                    for a in participants:
+                        rewards[a] += REWARD_COORD
+                        info['energy_gains'][a] = (
+                            info['energy_gains'].get(a, 0) + ENERGY_FROM_CO)
+                else:
+                    info['n_coord_random'] = info.get('n_coord_random', 0) + 1
 
         # ── Ghost node collection ──────────────────────────────────────────────
         for agent_id in self.agent_ids:

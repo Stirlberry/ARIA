@@ -83,9 +83,11 @@ def main():
     channel = CommunicationChannel()
     vis     = Visualiser()
 
-    all_ids_ever        = list(INITIAL_AGENTS)
-    generation          = 0
-    last_replication_ep = 0
+    all_ids_ever           = list(INITIAL_AGENTS)
+    generation             = 0
+    last_replication_ep    = 0
+    total_signalled_coords = 0
+    total_random_coords    = 0
 
     print('=' * 64)
     print('  ARIA-2 — Lewis Signaling Game')
@@ -268,6 +270,14 @@ def main():
 
                 if info['coord_achieved']:
                     ep_coord_any = True
+                    if info.get('n_coord_signalled', 0) > 0:
+                        total_signalled_coords += info['n_coord_signalled']
+                        print(f'  [Coord] ep {episode} step {step} — SIGNALLED '
+                              f'| agents: {" + ".join(info["coord_agents"])}')
+                    if info.get('n_coord_random', 0) > 0:
+                        total_random_coords += info['n_coord_random']
+                        print(f'  [Coord] ep {episode} step {step} — RANDOM (no reward) '
+                              f'| agents: {" + ".join(info["coord_agents"])}')
 
                 # Record signals and compounds
                 active_sigs = []
@@ -408,6 +418,8 @@ def main():
                                    for a in ids)
                 print(f'    energy   {e_vals}')
                 print(f'    lexicon {assigned}/16 | compounds {compound} | sequences {seqs}')
+                print(f'    coord    signalled:{total_signalled_coords}  '
+                      f'random:{total_random_coords}')
                 if channel.coord_pairs:
                     top_pair  = max(channel.coord_pairs, key=channel.coord_pairs.get)
                     top_count = channel.coord_pairs[top_pair]
@@ -427,8 +439,7 @@ def main():
         channel.flush_log()
         save_system.save_checkpoint(
             episode, agents, agent_types, channel, generation,
-            last_replication_ep, all_ids_ever, plateau_mon,
-            last_plateau_ep
+            last_replication_ep, all_ids_ever
         )
         print('  Exiting.')
         return
@@ -436,8 +447,7 @@ def main():
     channel.flush_log()
     save_system.save_checkpoint(
         MAX_EPISODES, agents, agent_types, channel, generation,
-        last_replication_ep, all_ids_ever, plateau_mon,
-        last_plateau_ep
+        last_replication_ep, all_ids_ever
     )
     print('\n  Training complete.')
     print(f'  Generations reached : {generation}')
