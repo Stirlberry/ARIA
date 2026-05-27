@@ -23,8 +23,7 @@ SAVE_DIR = 'logs/saves'
 
 
 def save_checkpoint(episode, agents, channel, generation,
-                    last_replication_ep, all_ids_ever, plateau_mon,
-                    last_plateau_ep=0):
+                    last_replication_ep, all_ids_ever, plateau_mon):
     os.makedirs(SAVE_DIR, exist_ok=True)
 
     base      = f'checkpoint_ep{episode:06d}'
@@ -72,7 +71,6 @@ def save_checkpoint(episode, agents, channel, generation,
         'episode':             episode,
         'generation':          generation,
         'last_replication_ep': last_replication_ep,
-        'last_plateau_ep':     last_plateau_ep,
         'all_ids_ever':        all_ids_ever,
         'active_agents':       list(agents.keys()),
         'agent_meta':          agent_meta,
@@ -243,6 +241,5 @@ def restore(meta, pt_path, shared_replay=None):
         meta['last_replication_ep'],
         meta['all_ids_ever'],
         meta['plateau_history'],
-        meta['episode'] + 1,
-        meta.get('last_plateau_ep', 0)
+        meta['episode'] + 1
     )

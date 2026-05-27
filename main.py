@@ -6,11 +6,9 @@ Phase 3: Energy-based survival, death, ghost nodes, emergent communication,
 
 Run:
     python main.py
-    python main.py --no-comms   # disable all inter-agent signals (ablation test)
 """
 
 import sys
-import argparse
 sys.stdout.reconfigure(line_buffering=True)
 
 # Load .env file if present — sets ANTHROPIC_API_KEY without needing export
@@ -41,7 +39,7 @@ from config import (
     LEXICON_LOG_PATH,
     MIN_REPLICATION_INTERVAL, MAX_REPLICATION_INTERVAL,
     AUTOSAVE_EVERY, ENV_DRIFT_INTERVAL,
-    MAX_POPULATION, MIN_POPULATION,
+    MAX_POPULATION,
     ENERGY_MAX, REWARD_DEATH, REWARD_REPRODUCE,
     REPRODUCTION_THRESHOLD, REPRODUCTION_COST,
     SPAWN_PAUSE_STEPS,
@@ -71,12 +69,6 @@ def _choose_separation():
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--no-comms', action='store_true',
-                        help='Disable all inter-agent signals (ablation test)')
-    args = parser.parse_args()
-    no_comms = args.no_comms
-
     shared_replay  = make_replay_buffer()
     agents         = {a: ARIAAgent(a, replay=shared_replay) for a in INITIAL_AGENTS}
     env            = Environment(list(agents.keys()))
@@ -95,8 +87,6 @@ def main():
     print('=' * 64)
     print('  ARIA — Adaptive Reasoning and Interaction Agent')
     print('  Phase 3: Survival, Reproduction, Emergent Communication')
-    if no_comms:
-        print('  *** ABLATION MODE: inter-agent signals disabled ***')
     print('=' * 64)
     print(f'  Founders        : {" + ".join(INITIAL_AGENTS)}')
     print(f'  Replication     : self-directed  '
@@ -110,8 +100,7 @@ def main():
     meta, pt_path = save_system.prompt_resume()
     if meta is not None:
         (agents, channel, generation, last_replication_ep,
-         all_ids_ever, plateau_history, start_episode,
-         last_plateau_ep) = save_system.restore(meta, pt_path, shared_replay)
+         all_ids_ever, plateau_history, start_episode) = save_system.restore(meta, pt_path, shared_replay)
         for agent_id, history in plateau_history.items():
             plateau_mon.register(agent_id)
             for r in history:
@@ -132,9 +121,9 @@ def main():
                 env.drift_nodes()
                 print(f'  [Drift] Nodes relocated at episode {episode}')
 
-            # ── Death phase: plateau triggers kill-weakest (needs > MIN_POPULATION to cull) ──
+            # ── Death phase: plateau triggers kill-weakest (needs ≥ 2 to compare) ──
             # if len(agents) > 1:                          # old: fired regardless of population size
-            if len(agents) > MIN_POPULATION:
+            if len(agents) >= MAX_POPULATION:
                 should_kill, kill_reason = plateau_mon.should_replicate(
                     agents, episode, last_plateau_ep
                 )
@@ -175,9 +164,6 @@ def main():
                     action = agent.select_action(states[agent_id])
                     actions[agent_id]      = action
                     signals_sent[agent_id] = ARIAAgent.get_signal_from_action(action)
-
-                if no_comms:
-                    signals_sent = {a: None for a in agents}
 
                 # ── Birth sequence: pause parents, reveal child on countdown ──
                 if spawn_event is not None:
@@ -478,8 +464,7 @@ def main():
                 channel.flush_log()
                 save_system.save_checkpoint(
                     episode, agents, channel, generation,
-                    last_replication_ep, all_ids_ever, plateau_mon,
-                    last_plateau_ep
+                    last_replication_ep, all_ids_ever, plateau_mon
                 )
 
     except KeyboardInterrupt:
@@ -487,8 +472,7 @@ def main():
         channel.flush_log()
         save_system.save_checkpoint(
             episode, agents, channel, generation,
-            last_replication_ep, all_ids_ever, plateau_mon,
-            last_plateau_ep
+            last_replication_ep, all_ids_ever, plateau_mon
         )
         print('  Exiting.')
         return
@@ -496,8 +480,7 @@ def main():
     channel.flush_log()
     save_system.save_checkpoint(
         MAX_EPISODES, agents, channel, generation,
-        last_replication_ep, all_ids_ever, plateau_mon,
-        last_plateau_ep
+        last_replication_ep, all_ids_ever, plateau_mon
     )
     print('\n  Training complete.')
     print(f'  Generations reached : {generation}')
