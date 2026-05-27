@@ -1,13 +1,6 @@
 """
-ARIA Save System — Phase 2
-Persists full simulation state including Phase 2 fields:
-  n_layers, activation, use_skip, world model weights,
-  cultural memory, sub-goal, and compound lexicon.
-
-Save format (per checkpoint):
-  logs/saves/checkpoint_ep{N:06d}.pt   — network weights (PyTorch state dicts)
-  logs/saves/checkpoint_ep{N:06d}.json — all other state
-  logs/saves/latest.json               — pointer to most recent checkpoint
+ARIA-2 Save System — Lewis Signaling Game
+Checkpoint format includes agent_type for each agent.
 """
 
 import os
@@ -22,7 +15,7 @@ from config import (
 SAVE_DIR = 'logs/saves'
 
 
-def save_checkpoint(episode, agents, channel, generation,
+def save_checkpoint(episode, agents, agent_types, channel, generation,
                     last_replication_ep, all_ids_ever, plateau_mon,
                     last_plateau_ep=0):
     os.makedirs(SAVE_DIR, exist_ok=True)
@@ -35,10 +28,11 @@ def save_checkpoint(episode, agents, channel, generation,
     agent_meta = {}
     for agent_id, agent in agents.items():
         key = agent_id.replace('-', '_')
-        weights[key]            = agent.online_net.state_dict()
-        weights[f'{key}_wm']    = agent.world_model.state_dict()
-        weights[f'{key}_tom']   = agent.tom_model.state_dict()
+        weights[key]          = agent.online_net.state_dict()
+        weights[f'{key}_wm']  = agent.world_model.state_dict()
+        weights[f'{key}_tom'] = agent.tom_model.state_dict()
         agent_meta[agent_id] = {
+            'agent_type':     int(agent.agent_type),
             'epsilon':        round(float(agent.epsilon), 8),
             'total_reward':   round(float(agent.total_reward), 4),
             'episodes':       int(agent.episodes),
@@ -75,6 +69,7 @@ def save_checkpoint(episode, agents, channel, generation,
         'last_plateau_ep':     last_plateau_ep,
         'all_ids_ever':        all_ids_ever,
         'active_agents':       list(agents.keys()),
+        'agent_types':         {aid: int(t) for aid, t in agent_types.items()},
         'agent_meta':          agent_meta,
         'channel': {
             'total_signals':    channel.total_signals,
@@ -153,21 +148,25 @@ def restore(meta, pt_path, shared_replay=None):
 
     weights = torch.load(pt_path, weights_only=True)
 
+    saved_agent_types = meta.get('agent_types', {})
     agents = {}
     for agent_id in meta['active_agents']:
         key = agent_id.replace('-', '_')
         am  = meta['agent_meta'][agent_id]
 
-        # Restore cultural memory
         cm_data = am.get('cultural_memory', [])
         cultural_memory = EpisodicMemory.from_list(cm_data) if cm_data else None
 
-        # Restore sub-goal
         sg_data  = am.get('sub_goal')
         sub_goal = SubGoal.from_dict(sg_data) if sg_data else None
 
+        # agent_type from agent_meta takes precedence, then from top-level agent_types
+        agent_type = int(am.get('agent_type',
+                         saved_agent_types.get(agent_id, 0)))
+
         agent = ARIAAgent(
             agent_id,
+            agent_type      = agent_type,
             learning_rate   = float(am.get('learning_rate',   LEARNING_RATE)),
             epsilon_decay   = float(am.get('epsilon_decay',   EPSILON_DECAY)),
             intrinsic_beta  = float(am.get('intrinsic_beta',  INTRINSIC_BETA)),
@@ -190,14 +189,14 @@ def restore(meta, pt_path, shared_replay=None):
             try:
                 agent.world_model.load_state_dict(weights[wm_key])
             except Exception:
-                pass  # input-size mismatch — world model starts fresh
+                pass
 
         tom_key = f'{key}_tom'
         if tom_key in weights:
             try:
                 agent.tom_model.load_state_dict(weights[tom_key])
             except Exception:
-                pass  # architecture mismatch — ToM starts fresh
+                pass
 
         agent.epsilon                = float(am['epsilon'])
         agent.total_reward           = float(am['total_reward'])
@@ -210,7 +209,9 @@ def restore(meta, pt_path, shared_replay=None):
         agent.currency_reward_total  = float(am.get('currency_reward_total', 0.0))
         agent.goal_discovery._last_crystallise_ep = int(
             am.get('goal_discovery_last_crystallise_ep', 0))
-        agents[agent_id]        = agent
+        agents[agent_id] = agent
+
+    agent_types = {aid: agents[aid].agent_type for aid in agents}
 
     channel               = CommunicationChannel(append_log=True)
     channel.total_signals = meta['channel']['total_signals']
@@ -238,6 +239,7 @@ def restore(meta, pt_path, shared_replay=None):
 
     return (
         agents,
+        agent_types,
         channel,
         meta['generation'],
         meta['last_replication_ep'],

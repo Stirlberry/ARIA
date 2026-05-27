@@ -1,24 +1,11 @@
 """
-ARIA Agent — Phase 3
-Full evolutionary DQN with brain evolution, world model, cultural inheritance,
-curiosity, sub-goals, specialisation tracking, shared PER replay, dense rewards,
+ARIA-2 Agent — Lewis Signaling Game
+DQN with brain evolution, world model, cultural inheritance, curiosity,
 Theory of Mind, and energy-based survival.
 
-Bottleneck fixes applied:
-  - visit_counts: evicts states with count > _VISIT_COUNT_EVICT_THRESH when
-    dict exceeds _VISIT_COUNT_MAX (prevents unbounded memory growth).
-  - Training: one replay.sample() per cycle feeds Q-learning, world model,
-    and Dyna-Q — down from 5 separate samples.
-  - Dyna-Q uses random imagined actions on real states for diversity without
-    extra buffer sampling.
-  - ToM: partner features encoded once per step; single forward pass serves
-    both the coordination-intent bonus and the training loss.
-  - ToM warmup: bonus is suppressed until _tom_steps >= WORLD_MODEL_WARMUP
-    to avoid misleading Q-values from random early predictions.
-  - PER update_priorities: vectorised — numpy computes all (|err|+ε)^α at
-    once; SumTree propagates via level-by-level numpy slicing instead of a
-    Python loop.
-  - torch.from_numpy() for zero-copy tensor construction in training.
+Key change from ARIA: agent_type (0 or 1) is encoded in the state vector.
+Agents of type-0 see type-0 targets; type-1 agents see type-1 targets.
+_INPUT_SIZE is 114 (ARIA was 112) — two extra channels for agent_type one-hot.
 """
 
 import json
@@ -52,32 +39,26 @@ from config import (
     ENERGY_DRAIN_LOW, ENERGY_DRAIN_MED, ENERGY_DRAIN_HIGH,
 )
 
-# ── Input encoding ─────────────────────────────────────────────────────────────
+_N_ENERGY_BINS   = 5
+_N_AGENT_TYPES   = 2   # type-0 and type-1
 
-_N_ENERGY_BINS = 5   # critical / low / medium / high / full (bin 4 = above reproduction threshold)
-
-_INPUT_SIZE = (2                                  # x, y normalised floats (portable across grid sizes)
-               + 9 + 9 + 9                        # currency_dir, coord_dir, partner_dir
-               + 3 + 3 + 3                        # currency_dist, coord_dist, partner_dist
+_INPUT_SIZE = (2                                  # x, y
+               + 9 + 9 + 9                        # currency_dir, target_dir, partner_dir
+               + 3 + 3 + 3                        # currency_dist, target_dist, partner_dist
                + (N_SIGNALS + 1) * MAX_MSG_LEN    # received message (4 token slots)
                + _N_ENERGY_BINS                   # own energy level
-               + 1)                               # sender identity channel (Option 2)
+               + 1                                # sender identity channel
+               + _N_AGENT_TYPES)                  # own type (one-hot: [type0, type1])
 
-# Observable partner features for Theory of Mind
-_PARTNER_FEATURE_SIZE = 9 + 3 + (N_SIGNALS + 1) * MAX_MSG_LEN  # dir + dist + msg = 80
+_PARTNER_FEATURE_SIZE = 9 + 3 + (N_SIGNALS + 1) * MAX_MSG_LEN
 
-# visit_counts eviction: evict when dict exceeds this size; keep only entries
-# with count <= threshold (entries above contribute < beta/10 curiosity bonus)
 _VISIT_COUNT_MAX          = 50_000
 _VISIT_COUNT_EVICT_THRESH = 100
 
-# Reputation system — per-partner trust scores
-_REP_INIT        = 0.5    # starting reputation for an unknown partner
-_REP_BOOST       = 0.05   # increase per episode when coordination achieved
-_REP_PENALTY     = 0.01   # decrease per episode when no coordination
-_REP_BONUS_SCALE = 0.5    # max extra reward per step when partner rep = 1.0
-
-# ── Hyperparameter evolution bounds ───────────────────────────────────────────
+_REP_INIT        = 0.5
+_REP_BOOST       = 0.05
+_REP_PENALTY     = 0.01
+_REP_BONUS_SCALE = 0.5
 
 _HP_BOUNDS = {
     'learning_rate':  (1e-4,  1e-2),
@@ -87,31 +68,24 @@ _HP_BOUNDS = {
     'hidden_size':    (64,    512),
     'n_layers':       (1.0,   4.0),
     'use_skip':       (0.0,   1.0),
-    'drain_rate':     (ENERGY_DRAIN_LOW, ENERGY_DRAIN_HIGH),  # evolvable energy cost per step
+    'drain_rate':     (ENERGY_DRAIN_LOW, ENERGY_DRAIN_HIGH),
 }
-
-# ── Activation registry ────────────────────────────────────────────────────────
 
 _ACTS = {'relu': nn.ReLU, 'tanh': nn.Tanh, 'gelu': nn.GELU}
 
 
-# ── Networks ───────────────────────────────────────────────────────────────────
-
 class _QNet(nn.Module):
-    """DQN with evolvable depth, activation, and optional skip connections."""
-
     def __init__(self, hidden_size, n_actions, n_layers=2,
                  activation='relu', use_skip=False):
         super().__init__()
         act_cls       = _ACTS.get(activation, nn.ReLU)
         self.use_skip = use_skip and n_layers >= 2
         self.act      = act_cls()
-
         self.input_layer = nn.Linear(_INPUT_SIZE, hidden_size)
         self.hidden      = nn.ModuleList(
             [nn.Linear(hidden_size, hidden_size) for _ in range(max(0, n_layers - 1))]
         )
-        self.output      = nn.Linear(hidden_size, n_actions)
+        self.output = nn.Linear(hidden_size, n_actions)
 
     def forward(self, x):
         h = self.act(self.input_layer(x))
@@ -122,8 +96,6 @@ class _QNet(nn.Module):
 
 
 class _WorldModel(nn.Module):
-    """Predicts (next_state_vec, reward) from (state_vec, action_onehot)."""
-
     def __init__(self, n_actions):
         super().__init__()
         self.trunk = nn.Sequential(
@@ -141,8 +113,6 @@ class _WorldModel(nn.Module):
 
 
 class _PartnerModel(nn.Module):
-    """Predicts coordination intent from observable partner features (logit output)."""
-
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
@@ -155,11 +125,7 @@ class _PartnerModel(nn.Module):
         return self.net(x).squeeze(-1)
 
 
-# ── Prioritised Experience Replay ──────────────────────────────────────────────
-
 class _SumTree:
-    """Binary sum-tree for O(log n) priority sampling."""
-
     def __init__(self, capacity):
         self.capacity  = capacity
         self.tree      = np.zeros(2 * capacity - 1, dtype=np.float64)
@@ -168,7 +134,6 @@ class _SumTree:
         self.n_entries = 0
 
     def _propagate(self, idx, change):
-        """Scalar propagation used only during single-entry add()."""
         while idx > 0:
             idx = (idx - 1) // 2
             self.tree[idx] += change
@@ -203,25 +168,17 @@ class _SumTree:
         self._propagate(idx, change)
 
     def batch_update(self, indices, priorities):
-        """
-        Vectorised batch update: set leaf priorities then propagate
-        level-by-level using numpy slicing instead of per-entry Python loops.
-        Reduces priority-update cost from O(n * log(cap)) Python ops to
-        O(log(cap)) numpy ops.
-        """
         idx_arr = np.asarray(indices, dtype=np.int64)
         pri_arr = np.asarray(priorities, dtype=np.float64)
         self.tree[idx_arr] = pri_arr
-
         current = idx_arr
         while len(current) > 0:
-            # Move up one level, only from nodes that have a parent
-            with_parent  = current[current > 0]
+            with_parent = current[current > 0]
             if len(with_parent) == 0:
                 break
-            parent_idxs  = np.unique((with_parent - 1) // 2)
-            left         = 2 * parent_idxs + 1
-            right        = np.minimum(left + 1, len(self.tree) - 1)
+            parent_idxs          = np.unique((with_parent - 1) // 2)
+            left                 = 2 * parent_idxs + 1
+            right                = np.minimum(left + 1, len(self.tree) - 1)
             self.tree[parent_idxs] = self.tree[left] + self.tree[right]
             current = parent_idxs
 
@@ -232,8 +189,6 @@ class _SumTree:
 
 
 class _PrioritizedReplayBuffer:
-    """Shared, prioritised experience replay for all agents."""
-
     def __init__(self, capacity, alpha=PER_ALPHA):
         self.alpha         = alpha
         self.tree          = _SumTree(capacity)
@@ -241,17 +196,15 @@ class _PrioritizedReplayBuffer:
 
     def push(self, s, a, r, ns):
         if len(s) != _INPUT_SIZE or len(ns) != _INPUT_SIZE:
-            return  # reject state vectors from a different input-size era
+            return
         self.tree.add(self._max_priority, (s, a, r, ns))
 
     def sample(self, n, beta):
         n = min(n, len(self))
         if n == 0:
             return None
-
         segment  = self.tree.total() / n
         indices, priorities, batch = [], [], []
-
         for i in range(n):
             lo = segment * i
             hi = segment * (i + 1)
@@ -262,14 +215,11 @@ class _PrioritizedReplayBuffer:
             indices.append(idx)
             priorities.append(priority)
             batch.append(data)
-
         if not batch:
             return None
-
         probs      = np.array(priorities, dtype=np.float64) / (self.tree.total() + 1e-12)
         is_weights = (len(self) * probs) ** (-beta)
         is_weights = (is_weights / is_weights.max()).astype(np.float32)
-
         s_b, a_b, r_b, ns_b = zip(*batch)
         return (np.array(s_b,  dtype=np.float32),
                 np.array(a_b,  dtype=np.int64),
@@ -279,7 +229,6 @@ class _PrioritizedReplayBuffer:
                 indices)
 
     def update_priorities(self, indices, errors):
-        """Vectorised: compute all priorities at once then batch-update the tree."""
         priorities = (np.abs(np.asarray(errors, dtype=np.float64)) + 1e-6) ** self.alpha
         self._max_priority = max(self._max_priority, float(priorities.max()))
         self.tree.batch_update(indices, priorities)
@@ -289,22 +238,20 @@ class _PrioritizedReplayBuffer:
 
 
 def make_replay_buffer():
-    """Factory: creates the shared PER buffer used by all agents."""
     return _PrioritizedReplayBuffer(SHARED_REPLAY_SIZE)
 
 
-# ── State encoding ─────────────────────────────────────────────────────────────
-
 def _energy_bin(energy):
-    """Map energy to one of 5 bins. Bin 4 = at or above reproduction threshold."""
     return min(int(energy * _N_ENERGY_BINS / ENERGY_MAX), _N_ENERGY_BINS - 1)
 
 
-def _encode(state, energy=ENERGY_START):
-    x, y, cd, kd, pd       = state[0], state[1], state[2], state[3], state[4]
+def _encode(state, energy=ENERGY_START, agent_type=0):
+    x, y           = state[0], state[1]
+    cd, kd, pd     = state[2], state[3], state[4]
     c_dist, k_dist, p_dist = state[5], state[6], state[7]
-    msg = state[8:8 + MAX_MSG_LEN]
-    sender_id_int = state[12] if len(state) > 12 else 0
+    msg            = state[8:8 + MAX_MSG_LEN]
+    sender_id_int  = state[12] if len(state) > 12 else 0
+
     vec = np.zeros(_INPUT_SIZE, dtype=np.float32)
     off = 0
     vec[off] = x / (GRID_W - 1); off += 1
@@ -318,15 +265,12 @@ def _encode(state, energy=ENERGY_START):
     for tok in msg:
         vec[off + tok] = 1.0; off += N_SIGNALS + 1
     vec[off + _energy_bin(energy)] = 1.0; off += _N_ENERGY_BINS
-    vec[off] = sender_id_int / SENDER_ID_MAX; off += 1  # Option 2: sender identity
+    vec[off] = sender_id_int / SENDER_ID_MAX;  off += 1
+    vec[off + min(agent_type, 1)] = 1.0;       off += _N_AGENT_TYPES
     return vec
 
 
-# ── Cultural inheritance ───────────────────────────────────────────────────────
-
 class EpisodicMemory:
-    """Stores high-value transitions for cultural transmission between generations."""
-
     def __init__(self, max_size=MEMORY_SIZE):
         self.max_size    = max_size
         self.experiences = []
@@ -367,17 +311,13 @@ class EpisodicMemory:
         return len(self.experiences)
 
 
-# ── Goal discovery ─────────────────────────────────────────────────────────────
-
-# State layout: s[2]=currency_dir, s[3]=coord_dir, s[4]=partner_dir (8=absent)
-#               s[5]=currency_dist_bin, s[6]=coord_dist_bin, s[7]=partner_dist_bin
 _SPEC_CONDITIONS = {
-    'coord_close':    lambda s: s[6] == 0,
-    'coord_near':     lambda s: s[6] <= 1,
+    'target_close':   lambda s: s[6] == 0,
+    'target_near':    lambda s: s[6] <= 1,
     'currency_close': lambda s: s[5] == 0,
     'partner_close':  lambda s: s[7] == 0,
     'avoid_partner':  lambda s: s[7] == 2,
-    'face_coord':     lambda s: s[3] != 8,
+    'face_target':    lambda s: s[3] != 8,
     'face_partner':   lambda s: s[4] != 8,
     'face_currency':  lambda s: s[2] != 8,
 }
@@ -385,11 +325,6 @@ _TRACKABLE_CONDITIONS = list(_SPEC_CONDITIONS.items())
 
 
 class GoalDiscovery:
-    """
-    Tracks which state features predict high reward and crystallises the
-    strongest correlation into a sub-goal spec.
-    """
-
     def __init__(self):
         self._last_crystallise_ep = 0
         self.stats = {
@@ -412,7 +347,6 @@ class GoalDiscovery:
         if episode - self._last_crystallise_ep < GOAL_DISCOVERY_CRYSTALLISE_EVERY:
             return None
         self._last_crystallise_ep = episode
-
         candidates = []
         for name, _ in _TRACKABLE_CONDITIONS:
             st = self.stats[name]
@@ -425,10 +359,8 @@ class GoalDiscovery:
             lift = avg_met - avg_unmet
             if lift >= GOAL_DISCOVERY_MIN_LIFT:
                 candidates.append((lift, name))
-
         if not candidates:
             return None
-
         lift, best = max(candidates)
         spec = {'condition': best, 'bonus': GOAL_DISCOVERY_BONUS, 'negate': False}
         self.history.append((episode, spec, round(lift, 3)))
@@ -445,9 +377,7 @@ class GoalDiscovery:
         return sorted(rows, key=lambda x: -x[1])
 
 
-# ── Sub-goal templates ─────────────────────────────────────────────────────────
-
-def _sg_face_coord(_):
+def _sg_face_target(_):
     return lambda s: 0.3 if s[3] != 8 else 0.0
 
 def _sg_partner_contact(_):
@@ -456,17 +386,17 @@ def _sg_partner_contact(_):
 def _sg_currency_direction(_):
     return lambda s: 0.2 if s[2] != 8 else 0.0
 
-def _sg_coord_nearby(_):
+def _sg_target_nearby(_):
     return lambda s: 0.4 if s[6] == 0 else 0.0
 
 def _sg_partner_close(_):
     return lambda s: 0.3 if s[7] == 0 else 0.0
 
 def _sg_from_spec(params):
-    condition = params.get('condition', 'face_coord')
+    condition = params.get('condition', 'face_target')
     bonus     = float(params.get('bonus', 0.3))
     negate    = bool(params.get('negate', False))
-    pred      = _SPEC_CONDITIONS.get(condition, _SPEC_CONDITIONS['face_coord'])
+    pred      = _SPEC_CONDITIONS.get(condition, _SPEC_CONDITIONS['face_target'])
     def fn(s):
         met = pred(s)
         if negate:
@@ -475,22 +405,19 @@ def _sg_from_spec(params):
     return fn
 
 SUB_GOAL_TEMPLATES = {
-    'face_coord':       _sg_face_coord,
+    'face_target':      _sg_face_target,
     'partner_contact':  _sg_partner_contact,
     'currency_dir':     _sg_currency_direction,
-    'coord_nearby':     _sg_coord_nearby,
+    'target_nearby':    _sg_target_nearby,
     'partner_close':    _sg_partner_close,
     'spec':             _sg_from_spec,
 }
 
 
 class SubGoal:
-    """A reward bonus active for SUB_GOAL_DURATION steps, generated by Claude."""
-
-    def __init__(self, template='face_coord', params=None,
-                 duration=SUB_GOAL_DURATION):
+    def __init__(self, template='face_target', params=None, duration=SUB_GOAL_DURATION):
         params            = params or {}
-        factory           = SUB_GOAL_TEMPLATES.get(template, _sg_face_coord)
+        factory           = SUB_GOAL_TEMPLATES.get(template, _sg_face_target)
         self.template     = template
         self.params       = params
         self.duration     = duration
@@ -527,10 +454,9 @@ class SubGoal:
         return sg
 
 
-# ── Agent ──────────────────────────────────────────────────────────────────────
-
 class ARIAAgent:
     def __init__(self, agent_id,
+                 agent_type=0,
                  learning_rate=None, epsilon_decay=None,
                  intrinsic_beta=None, episodic_beta=None,
                  hidden_size=None, n_layers=None,
@@ -542,11 +468,11 @@ class ARIAAgent:
                  sub_goal=None,
                  replay=None):
 
-        self.agent_id  = agent_id
-        self.epsilon   = EPSILON_START
-        self.n_actions = 8 + N_SIGNALS
+        self.agent_id   = agent_id
+        self.agent_type = int(agent_type)
+        self.epsilon    = EPSILON_START
+        self.n_actions  = 8 + N_SIGNALS
 
-        # Evolvable hyperparameters
         self.learning_rate  = float(learning_rate)  if learning_rate  is not None else LEARNING_RATE
         self.epsilon_decay  = float(epsilon_decay)  if epsilon_decay  is not None else EPSILON_DECAY
         self.intrinsic_beta = float(intrinsic_beta) if intrinsic_beta is not None else INTRINSIC_BETA
@@ -557,10 +483,8 @@ class ARIAAgent:
         self.use_skip       = bool(round(float(use_skip))) if use_skip is not None else False
         self.drain_rate     = float(np.clip(float(drain_rate), ENERGY_DRAIN_LOW, ENERGY_DRAIN_HIGH)) if drain_rate is not None else random.choice([ENERGY_DRAIN_LOW, ENERGY_DRAIN_MED, ENERGY_DRAIN_HIGH])
 
-        # Energy — persists across episodes (not reset between episodes)
         self.energy = float(energy) if energy is not None else ENERGY_START
 
-        # Q-networks
         self.online_net = _QNet(self.hidden_size, self.n_actions,
                                 self.n_layers, self.activation, self.use_skip)
         self.target_net = _QNet(self.hidden_size, self.n_actions,
@@ -574,42 +498,30 @@ class ARIAAgent:
         self.target_net.eval()
         self.optimizer = optim.Adam(self.online_net.parameters(), lr=self.learning_rate)
 
-        # World model
         self.world_model  = _WorldModel(self.n_actions)
         self.wm_optimizer = optim.Adam(self.world_model.parameters(), lr=WORLD_MODEL_LR)
         self._wm_steps    = 0
 
-        # Shared PER replay (or per-agent fallback)
         self.replay  = replay if replay is not None else _PrioritizedReplayBuffer(REPLAY_BUFFER_SIZE)
         self._steps  = 0
         self.visit_counts = {}
         self._ep_visited  = set()
 
-        # Cultural memory
         self.cultural_memory = cultural_memory if cultural_memory is not None else EpisodicMemory()
         self.cultural_memory.seed_replay(self.replay, expected_size=_INPUT_SIZE)
 
-        # Sub-goal
-        self.sub_goal = sub_goal
-
-        # Internal goal discovery
+        self.sub_goal     = sub_goal
         self.goal_discovery = GoalDiscovery()
 
-        # Theory of Mind
         self.tom_model     = _PartnerModel()
         self.tom_optimizer = optim.Adam(self.tom_model.parameters(), lr=TOM_LR)
-        self.tom_criterion = nn.BCEWithLogitsLoss(
-            pos_weight=torch.tensor([TOM_POS_WEIGHT])
-        )
-        self._tom_steps = 0   # training samples seen; bonus withheld until warmed up
+        self.tom_criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([TOM_POS_WEIGHT]))
+        self._tom_steps    = 0
 
-        # Reputation — per-partner trust scores {agent_id: float in [0,1]}
         self.reputation = {}
 
-        # Specialisation
         self.coord_reward_total    = 0.0
         self.currency_reward_total = 0.0
-
         self.episode_reward = 0.0
         self.total_reward   = 0.0
         self.episodes       = 0
@@ -619,13 +531,12 @@ class ARIAAgent:
         if random.random() < self.epsilon:
             return random.randint(0, self.n_actions - 1)
         with torch.no_grad():
-            sv = torch.tensor(_encode(state, self.energy)).unsqueeze(0)
+            sv = torch.tensor(_encode(state, self.energy, self.agent_type)).unsqueeze(0)
             return int(self.online_net(sv).argmax().item())
 
     def _encode_partner_features(self, state):
-        """Extract observable partner features for the ToM model."""
         pd, p_dist = state[4], state[7]
-        msg = state[8:8 + MAX_MSG_LEN]
+        msg        = state[8:8 + MAX_MSG_LEN]
         vec        = np.zeros(_PARTNER_FEATURE_SIZE, dtype=np.float32)
         off        = 0
         vec[off + pd]     = 1.0; off += 9
@@ -640,31 +551,22 @@ class ARIAAgent:
 
     def update(self, state, action, reward, next_state, coord_achieved=None,
                pre_energy=None):
-        # ── Curiosity ──────────────────────────────────────────────────────────
         vc = self.visit_counts.get(state, 0) + 1
         self.visit_counts[state] = vc
         global_cur = self.intrinsic_beta / np.sqrt(vc)
         ep_cur     = self.episodic_beta if state not in self._ep_visited else 0.0
         self._ep_visited.add(state)
 
-
-        # ── Sub-goal bonus ─────────────────────────────────────────────────────
         sg_bonus = self.sub_goal.bonus(state) if (self.sub_goal and self.sub_goal.is_active) else 0.0
 
-        # ── Theory of Mind: encode once, single forward pass ──────────────────
-        # The same logit is detached for the intent bonus and differentiated for training.
         tom_bonus = 0.0
-        if state[4] != 8:   # partner visible
+        if state[4] != 8:
             pf    = self._encode_partner_features(state)
             pf_t  = torch.tensor(pf).unsqueeze(0)
-            logit = self.tom_model(pf_t)              # one forward pass
-
-            # Bonus from pre-update prediction (consistent with the policy that acted)
-            prob = torch.sigmoid(logit.detach()).item()
+            logit = self.tom_model(pf_t)
+            prob  = torch.sigmoid(logit.detach()).item()
             if self._tom_steps >= WORLD_MODEL_WARMUP and prob > TOM_INTENT_THRESHOLD:
                 tom_bonus = TOM_BONUS_SCALE * prob
-
-            # Train on the same logit computation graph
             if coord_achieved is not None:
                 target = torch.tensor([1.0 if coord_achieved else 0.0])
                 loss   = self.tom_criterion(logit, target)
@@ -673,19 +575,17 @@ class ARIAAgent:
                 self.tom_optimizer.step()
                 self._tom_steps += 1
 
-        # ── Reputation bonus: extra reward when coordinating with trusted partners
         rep_bonus = 0.0
         if coord_achieved and self.reputation:
             rep_bonus = np.mean(list(self.reputation.values())) * _REP_BONUS_SCALE
 
         augmented = reward + global_cur + ep_cur + sg_bonus + tom_bonus + rep_bonus
 
-        sv  = _encode(state,      pre_energy if pre_energy is not None else self.energy)
-        nsv = _encode(next_state, self.energy)
+        sv  = _encode(state,      pre_energy if pre_energy is not None else self.energy, self.agent_type)
+        nsv = _encode(next_state, self.energy, self.agent_type)
         self.replay.push(sv, action, augmented, nsv)
         self._steps += 1
 
-        # ── Training ───────────────────────────────────────────────────────────
         ready = (len(self.replay) >= MIN_REPLAY_SIZE and len(self.replay) >= BATCH_SIZE)
         if self._steps % TRAIN_FREQ == 0 and ready:
             batch = self.replay.sample(BATCH_SIZE, self._per_beta())
@@ -695,13 +595,9 @@ class ARIAAgent:
         if self._steps % TARGET_UPDATE_FREQ == 0:
             self.target_net.load_state_dict(self.online_net.state_dict())
 
-        # ── Cultural memory ────────────────────────────────────────────────────
         self.cultural_memory.store(sv, action, augmented, nsv)
-
-        # Goal discovery — raw env reward to avoid bonus feedback loops
         self.goal_discovery.record(state, reward)
 
-        # Specialisation tracking
         if reward >= REWARD_COORD * 0.8:
             self.coord_reward_total += reward
         elif reward >= REWARD_CURRENCY * 0.8:
@@ -711,22 +607,13 @@ class ARIAAgent:
         self.total_reward   += reward
 
     def _train_cycle(self, batch):
-        """
-        One training cycle on a pre-sampled batch.
-        Order: Q-learning → world model → Dyna-Q (all share the same tensors).
-        Reduces replay.sample() calls from 5 to 1 per cycle.
-        Dyna-Q uses random imagined actions on real states for diversity.
-        """
         s, a, r, ns, is_weights, indices = batch
-
-        # Zero-copy: torch.from_numpy shares memory with numpy arrays
         s_t  = torch.from_numpy(s)
         a_t  = torch.from_numpy(a)
         r_t  = torch.from_numpy(r)
         ns_t = torch.from_numpy(ns)
         w_t  = torch.from_numpy(is_weights)
 
-        # ── Double DQN with IS-weighted loss ───────────────────────────────────
         cur_q = self.online_net(s_t).gather(1, a_t.unsqueeze(1)).squeeze(1)
         with torch.no_grad():
             best_a   = self.online_net(ns_t).argmax(1, keepdim=True)
@@ -742,7 +629,6 @@ class ARIAAgent:
         nn.utils.clip_grad_norm_(self.online_net.parameters(), 1.0)
         self.optimizer.step()
 
-        # ── World model (reuses same batch tensors) ────────────────────────────
         a_oh = torch.zeros(len(a_t), self.n_actions)
         a_oh.scatter_(1, a_t.unsqueeze(1), 1.0)
         ns_pred, r_pred = self.world_model(s_t, a_oh)
@@ -752,9 +638,6 @@ class ARIAAgent:
         self.wm_optimizer.step()
         self._wm_steps += 1
 
-        # ── Dyna-Q: imagined rollouts from real states, random actions ─────────
-        # Random actions give different imagined transitions each iteration
-        # without an extra buffer sample.
         if self._wm_steps >= WORLD_MODEL_WARMUP:
             for _ in range(DYNA_STEPS):
                 a_img    = torch.randint(0, self.n_actions, (len(s_t),))
@@ -789,7 +672,6 @@ class ARIAAgent:
         return ep
 
     def update_reputation(self, partner_ids, coord_this_ep):
-        """Update trust scores for each partner after an episode."""
         for pid in partner_ids:
             current = self.reputation.get(pid, _REP_INIT)
             if coord_this_ep:
@@ -858,11 +740,7 @@ class ARIAAgent:
         return float(np.clip(val, lo, hi))
 
     @classmethod
-    def merge(cls, agent_a, agent_b, child_id, shared_replay=None):
-        """
-        Create a child via network crossover + full hyperparameter evolution.
-        Cultural memory and sub-goals inherited from stronger parent.
-        """
+    def merge(cls, agent_a, agent_b, child_id, child_type=None, shared_replay=None):
         min_r = min(agent_a.total_reward, agent_b.total_reward)
         a_s   = agent_a.total_reward - min_r
         b_s   = agent_b.total_reward - min_r
@@ -875,7 +753,9 @@ class ARIAAgent:
               for name, (lo, hi) in _HP_BOUNDS.items()}
         hp['activation'] = agent_a.activation if random.random() < w_a else agent_b.activation
 
-        child = cls(child_id, replay=shared_replay, energy=ENERGY_NEWBORN, **hp)
+        resolved_type = child_type if child_type is not None else random.choice([0, 1])
+        child = cls(child_id, agent_type=resolved_type,
+                    replay=shared_replay, energy=ENERGY_NEWBORN, **hp)
         child.epsilon = min(agent_a.epsilon, agent_b.epsilon)
 
         archs_match = (agent_a.hidden_size == agent_b.hidden_size == child.hidden_size and
@@ -913,7 +793,5 @@ class ARIAAgent:
                 )
                 break
 
-        # Inherit reputation from stronger parent
         child.reputation = dict(stronger.reputation)
-
         return child, round(w_a, 4), round(w_b, 4)

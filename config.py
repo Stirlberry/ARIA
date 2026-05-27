@@ -1,5 +1,9 @@
-# ARIA — Adaptive Reasoning and Interaction Agent
-# Phase 3 Configuration
+# ARIA-2 — Lewis Signaling Game Configuration
+#
+# Agents are split into two types (0 and 1). Each type can only see its own
+# target nodes. Reward fires only when BOTH types occupy the same target tile
+# simultaneously. Signals are the ONLY way for a sighted agent to guide a
+# blind agent to the target — a proper Lewis signaling game.
 
 # Grid
 GRID_W    = 32
@@ -7,17 +11,25 @@ GRID_H    = 24
 CELL_SIZE = 32
 
 # Nodes
-N_CURRENCY_NODES = 48
-N_COORD_NODES    = 24
+N_CURRENCY_NODES       = 48
+N_TARGET_NODES_PER_TYPE = 12   # 12 visible to type-0, 12 visible to type-1 (24 total)
+
+# Agent types
+FOUNDER_TYPES = {
+    'ARIA-CAFE': 0,
+    'ARIA-BABE': 1,
+    'ARIA-DEAD': 0,
+    'ARIA-BEEF': 1,
+}
 
 # Communication
-N_SIGNALS = 16
-MAX_MSG_LEN = 4            # max tokens per variable-length message
-SENDER_ID_MAX = 0xFFFF     # normalisation ceiling for sender identity channel (Option 2)
-UNASSIGNED_SYMBOL = '[?]'
-LEXICON_STABILITY_THRESHOLD = 12   # coordination successes required to crystallise a signal
-COMPOUND_THRESHOLD  = 8    # coordinated successes before a signal pair crystallises
-SEQUENCE_THRESHOLD  = 6    # coordinated successes before a message sequence crystallises
+N_SIGNALS   = 16
+MAX_MSG_LEN = 4
+SENDER_ID_MAX             = 0xFFFF
+UNASSIGNED_SYMBOL         = '[?]'
+LEXICON_STABILITY_THRESHOLD = 12
+COMPOUND_THRESHOLD          = 8
+SEQUENCE_THRESHOLD          = 6
 
 # Q-Learning / DQN
 LEARNING_RATE   = 1e-3
@@ -35,17 +47,16 @@ TARGET_UPDATE_FREQ = 200
 TRAIN_FREQ         = 4
 
 # Brain evolution
-N_LAYERS_DEFAULT = 2
-ACTIVATION_OPTIONS = ['relu', 'tanh', 'gelu']   # evolvable per-agent
+N_LAYERS_DEFAULT   = 2
+ACTIVATION_OPTIONS = ['relu', 'tanh', 'gelu']
 
 # World model + Dyna-Q
-DYNA_STEPS         = 3      # imagined Q-updates per real training step
+DYNA_STEPS         = 3
 WORLD_MODEL_LR     = 5e-4
 WORLD_MODEL_HIDDEN = 128
-WORLD_MODEL_WARMUP = 200    # real training steps before Dyna kicks in
+WORLD_MODEL_WARMUP = 200
 
 # Rewards
-
 REWARD_CURRENCY = 10.0
 REWARD_COORD    = 30.0
 REWARD_STEP     = -0.1
@@ -53,17 +64,16 @@ SIGNAL_WINDOW   = 5
 INTRINSIC_BETA  = 1.0
 EPISODIC_BETA   = 0.5
 
-# Rewards — new events (Phase 3)
-REWARD_REPRODUCE       =  10.0   # successful reproduction
-REWARD_DEATH           = -50.0   # agent dies (energy hits zero)
+REWARD_REPRODUCE = 10.0
+REWARD_DEATH     = -50.0
 
 # Cultural inheritance
-MEMORY_SIZE            = 150   # max high-value transitions per agent
-MEMORY_REWARD_THRESH   = 3.0   # augmented-reward threshold for storing a transition
+MEMORY_SIZE          = 150
+MEMORY_REWARD_THRESH = 3.0
 
-# Sub-goals (creative agency)
-SUB_GOAL_DURATION  = 300   # steps a sub-goal bonus is active
-SUB_GOAL_MAX_BONUS = 2.0   # max reward bonus per step from a sub-goal
+# Sub-goals
+SUB_GOAL_DURATION  = 300
+SUB_GOAL_MAX_BONUS = 2.0
 
 # Training
 MAX_EPISODES          = 20000
@@ -72,52 +82,51 @@ AUTOSAVE_EVERY        = 50
 
 # Population
 INITIAL_AGENTS   = ['ARIA-CAFE', 'ARIA-BABE', 'ARIA-DEAD', 'ARIA-BEEF']
-MAX_POPULATION       = 10   # population ceiling
-MIN_POPULATION       = 5    # Monitor will not cull below this floor
-MIN_COORD_AGENTS     = 2    # any 2 agents on a CO node triggers coordination
+MAX_POPULATION   = 10
+MIN_POPULATION   = 5
+MIN_COORD_AGENTS = 2
 
-# Energy system (Phase 3)
-ENERGY_START         = 400   # starting energy for all new agents
-ENERGY_MAX           = 600   # maximum energy cap — agents cannot exceed this
-ENERGY_NEWBORN       = 300   # starting energy for agents born via reproduction
-ENERGY_DRAIN_LOW     = 0.3   # passive energy drain per step (low drain rate)
-ENERGY_DRAIN_MED     = 0.5   # passive energy drain per step (medium drain rate)
-ENERGY_DRAIN_HIGH    = 0.7   # passive energy drain per step (high drain rate)
-ENERGY_FROM_CURRENCY = 50    # energy gained from consuming a currency node
-ENERGY_FROM_CO       = 150   # energy gained per agent from consuming a CO node
+# Energy
+ENERGY_START         = 400
+ENERGY_MAX           = 600
+ENERGY_NEWBORN       = 300
+ENERGY_DRAIN_LOW     = 0.3
+ENERGY_DRAIN_MED     = 0.5
+ENERGY_DRAIN_HIGH    = 0.7
+ENERGY_FROM_CURRENCY = 50
+ENERGY_FROM_CO       = 150
 
-# Survival and reproduction (Phase 3)
-REPRODUCTION_THRESHOLD = 500  # both agents must be above this energy level to reproduce
-REPRODUCTION_COST      = 200  # energy deducted from each parent on reproduction
+# Survival and reproduction
+REPRODUCTION_THRESHOLD = 500
+REPRODUCTION_COST      = 200
+SPAWN_PAUSE_STEPS      = 60
 
-SPAWN_PAUSE_STEPS      = 60   # steps parents freeze at birth point before separating
+# Ghost nodes
+GHOST_NODE_ACCESSES = 1
 
-# Ghost nodes — Tier 2 knowledge preservation (Phase 3)
-GHOST_NODE_ACCESSES = 1       # times a ghost node can be accessed before it disappears
-
-# Replication
+# Replication / Monitor
 MUTATION_STD             = 0.02
 HYPERPARAM_MUTATION_STD  = 0.10
 PLATEAU_WINDOW           = 25
-PLATEAU_DELTA_THRESH     = 0.10   # fraction of agent's mean absolute reward (scaled)
+PLATEAU_DELTA_THRESH     = 0.10
 MIN_REPLICATION_INTERVAL = 200
 MAX_REPLICATION_INTERVAL = 1000
 
 # Environmental co-evolution
-ENV_DRIFT_INTERVAL = 200   # episodes between node-drift events
-ENV_DRIFT_N_NODES  = 2     # nodes moved per drift event
+ENV_DRIFT_INTERVAL = 200
+ENV_DRIFT_N_NODES  = 2
 
 # Finite resources
-CURRENCY_NODE_CAPACITY = 5      # collections before a node depletes
-REGEN_MIN_STEPS = 100           # minimum steps before a consumed node respawns at a new random position
-REGEN_MAX_STEPS = 500           # maximum steps before a consumed node respawns
+CURRENCY_NODE_CAPACITY = 5
+REGEN_MIN_STEPS = 100
+REGEN_MAX_STEPS = 500
 
 # Fog of war
-FOG_RADIUS    = 5              # Chebyshev radius; nodes and agents beyond this are invisible — hard ceiling, no agent exceeds this
+FOG_RADIUS    = 5
 
-# Communication ranges (Phase 3)
-CHATTER_RANGE = 1              # adjacent only (Chebyshev distance ≤ 1)
-SHOUT_RANGE   = FOG_RADIUS - 1 # broadcast range = 4; less than fog so agents must close the gap
+# Communication ranges
+CHATTER_RANGE = 1
+SHOUT_RANGE   = FOG_RADIUS - 1
 
 # Shared replay buffer
 SHARED_REPLAY_SIZE = 80_000
@@ -129,15 +138,15 @@ PER_BETA_STEPS = 2_000_000
 
 # Theory of Mind
 TOM_LR               = 1e-3
-TOM_POS_WEIGHT       = 20.0   # upweight rare coordination events in BCELoss
+TOM_POS_WEIGHT       = 20.0
 TOM_INTENT_THRESHOLD = 0.5
 TOM_BONUS_SCALE      = 1.0
 
 # Internal goal discovery
-GOAL_DISCOVERY_MIN_SAMPLES       = 100   # min met/unmet samples before crystallising
-GOAL_DISCOVERY_CRYSTALLISE_EVERY = 50    # episodes between discovery attempts
-GOAL_DISCOVERY_MIN_LIFT          = 0.3   # min avg-reward lift over baseline
-GOAL_DISCOVERY_BONUS             = 0.3   # fixed bonus for self-discovered goals
+GOAL_DISCOVERY_MIN_SAMPLES       = 100
+GOAL_DISCOVERY_CRYSTALLISE_EVERY = 50
+GOAL_DISCOVERY_MIN_LIFT          = 0.3
+GOAL_DISCOVERY_BONUS             = 0.3
 
 # Logging
 LEXICON_LOG_PATH        = 'logs/lexicon.jsonl'
